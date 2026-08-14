@@ -33,12 +33,17 @@ done
 
 ```bash
 cp .env.example .env
-# 填 SLACK_BOT_TOKEN 和 SLACK_LIST_ID
+# 填 SLACK_BOT_TOKEN、SLACK_LIST_ID、SLACK_MY_USER_ID
 ```
 
 `.env` 在 `.gitignore` 裡，不會被 commit。
 
 `SLACK_LIST_ID` 從那張表的網址列取。
+
+`SLACK_MY_USER_ID` 是你自己的 Slack 成員 ID（`U` 開頭），`mine` 指令要用。
+Slack 點自己頭像 → 個人檔案 → 右上「⋮」→ 複製成員 ID。
+**不能靠 API 問出來** —— `xoxb-` token 打 `auth.test` 回的是 bot 自己的 ID，
+要解別人的 ID 或用 email 反查都需要 `users:read`，這個 app 沒有那個 scope。
 
 ## 用
 
@@ -47,6 +52,8 @@ bin/slack-list env      # 先確認設定讀到了（token 會遮起來）
 bin/slack-list count    # 通不通，看這個最快
 bin/slack-list fields   # 這張表有哪些欄位、各是什麼型別
 bin/slack-list todo     # 一行一列，人看的
+bin/slack-list mine     # 只印指派給我的列
+bin/slack-list mine 庫存 # 指派給我、而且整列文字含「庫存」的
 bin/slack-list json     # 壓平後的 JSON，給程式吃
 bin/slack-list raw      # Slack 原始回應，不加工
 bin/slack-list sample   # 只印第一列的原始結構

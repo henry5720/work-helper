@@ -29,9 +29,13 @@ PM（chieh）把 bug 與需求記在 Slack 的一張 List：**Bug/需求總表**
 ```bash
 cd ~/code/work-helper
 ./bin/slack-list todo     # 一行一列，人看的
+./bin/slack-list mine     # 只印指派給使用者自己的列
+./bin/slack-list mine 庫存 # 再加關鍵字過濾（比對整列文字，不分欄位）
 ./bin/slack-list json     # 壓平後的 JSON，要程式處理時用
 ./bin/slack-list fields   # 不確定欄位叫什麼的時候先跑這個
 ```
+
+問「我身上有什麼事」「跟 X 有關的」用 `mine`，不要自己撈 `json` 再土炮過濾。
 
 第一次跑或報錯時：
 
@@ -60,13 +64,18 @@ Slack 失敗時 HTTP 還是回 200，錯誤在 body 的 `ok:false`。腳本已�
 
 實際欄位以 `./bin/slack-list fields` 為準。已知的有：
 
-| 欄位 | 內容 |
-|---|---|
-| 名稱 | 帶前綴代號，例如 `T04 退貨表供應商欄位刪除`、`V01 在途欄位調整`、`B03 審核中心審核紀錄filter` |
-| 敘述 | 一段說明，**常常被截斷或只有幾個字** |
-| 狀態 | `前端完成` / `後端完成` / `暫停中（待觀察）` / `PM確認中` / 空白 |
+| 欄位 | key | 內容 |
+|---|---|---|
+| 指派給 | `todo_assignee` | user ID，例如 `U0B54FKJ93R`。**一列可以掛多人**，壓平後是空白分隔的字串 |
+| 名稱 | `name` | 帶前綴代號，例如 `T04 退貨表供應商欄位刪除`、`V01 在途欄位調整`、`B03 審核中心審核紀錄filter` |
+| 敘述 | `Col0B8E4BG7JT` | 一段說明，**常常被截斷或只有幾個字** |
+| 狀態 | `Col0B8S6V699T` | select，值是 `OptXXXX` 這種 option ID，**不是人看的字串** |
 
-兩個要注意的：
+三個要注意的：
+
+- **assignee 只有 ID，沒有名字。** 解成名字要 `users:read`，app 沒有那個 scope。
+  自己的 ID 從 `.env` 的 `SLACK_MY_USER_ID` 拿（`mine` 指令已經處理好），
+  別人的就只能是 ID。`auth.test` 問不出來，那回的是 bot 自己。
 
 - **名稱前綴（`T` / `V` / `S` / `D` / `B` + 數字）是某種模組代號，但對應關係還沒確認。**
   不要憑字面猜它對到哪個模組，要用就先問使用者。

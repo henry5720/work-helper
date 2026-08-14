@@ -60,6 +60,15 @@ def config():
     return token, list_id
 
 
+def my_user_id():
+    load_env()
+    uid = os.environ.get("SLACK_MY_USER_ID")
+    if not uid:
+        die("`.env` 裡沒有 SLACK_MY_USER_ID。"
+            "Slack 點自己頭像 → 個人檔案 → 右上「⋮」→ 複製成員 ID，貼進 .env。")
+    return uid
+
+
 def api(method, payload, token):
     req = urllib.request.Request(
         API + method,
@@ -202,18 +211,37 @@ def cmd_json():
     print(json.dumps([flatten(i) for i in fetch_all()], ensure_ascii=False, indent=2))
 
 
+def cmd_mine():
+    """只印指派給自己的列。多帶一個字串就再用它過濾（比對整列，不分欄位）。"""
+    uid = my_user_id()
+    kw = sys.argv[2] if len(sys.argv) > 2 else ""
+    rows = [flatten(i) for i in fetch_all()]
+    mine = [r for r in rows if uid in (r.get("todo_assignee") or "").split()]
+    if kw:
+        mine = [r for r in mine if kw in json.dumps(r, ensure_ascii=False)]
+    for row in mine:
+        rid = row.pop("_id", "")
+        cells = " ｜ ".join(f"{k}: {v}" for k, v in row.items())
+        print(f"[{rid}] {cells}")
+    scope = f"指派給 {uid}" + (f" 且含「{kw}」" if kw else "")
+    print(f"\n—— {scope}：{len(mine)} 列（全表 {len(rows)} 列）", file=sys.stderr)
+
+
 def cmd_env():
     load_env()
     token = os.environ.get("SLACK_BOT_TOKEN", "")
     list_id = os.environ.get("SLACK_LIST_ID", "")
+    my_id = os.environ.get("SLACK_MY_USER_ID", "")
     masked = f"{token[:9]}…{token[-4:]}" if len(token) > 15 else ("(沒設定)" if not token else "(太短，可能貼錯)")
     print(f".env       : {ROOT / '.env'}（{'有' if (ROOT / '.env').exists() else '不存在'}）")
     print(f"TOKEN      : {masked}")
     print(f"LIST_ID    : {list_id or '(沒設定)'}")
+    print(f"MY_USER_ID : {my_id or '(沒設定，mine 指令會不能用)'}")
 
 
 COMMANDS = {
     "todo": (cmd_todo, "一行一列，人看的（預設）"),
+    "mine": (cmd_mine, "只印指派給我的列，可多帶一個關鍵字再過濾"),
     "json": (cmd_json, "壓平後的 JSON，給程式吃"),
     "raw": (cmd_raw, "Slack 原始回應，完整不加工"),
     "sample": (cmd_sample, "只印第一列的原始結構"),
