@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""讀取 Slack List 的內容。
+
+只用標準函式庫，不需要安裝任何東西。
+設定放在 repo 根目錄的 .env（見 .env.example）。
+"""
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+API = "https://slack.com/api/"
+
+# Slack List 的每一格會用這些鍵之一放值，看欄位型別而定
+VALUE_KEYS = [
+    "text", "rich_text", "number", "select", "date", "user", "channel",
+    "attachment", "checkbox", "email", "phone", "rating", "timestamp",
+    "link", "reference",
+]
+
+ERROR_HINTS = {
+    "not_found": "找不到這張 List。要嘛 SLACK_LIST_ID 錯了，要嘛這張表還沒分享給你的 app。",
+    "list_not_found": "找不到這張 List。要嘛 SLACK_LIST_ID 錯了，要嘛這張表還沒分享給你的 app。",
+    "invalid_auth": "token 無效。確認 .env 裡是 xoxb- 開頭那串，而且 app 已經 Install to Workspace。",
+    "not_authed": "沒帶到 token。檢查 .env 有沒有被讀到（跑 `bin/slack-list env`）。",
+    "missing_scope": "app 少了 lists:read。加完 scope 要重新 Install to Workspace，token 會換一組新的。",
+    "ratelimited": "被限流了（Tier 2，每分鐘 20+ 次），等一下再跑。",
+}
+
+
+def die(msg):
+    print(f"錯誤：{msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def load_env():
+    f = ROOT / ".env"
+    if not f.exists():
+        return
+    for line in f.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+def config():
+    load_env()
+    token = os.environ.get("SLACK_BOT_TOKEN")
+    list_id = os.environ.get("SLACK_LIST_ID")
+    if not token:
+        die("`.env` 裡沒有 SLACK_BOT_TOKEN")
+    if not list_id:
+        die("`.env` 裡沒有 SLACK_LIST_ID")
+    return token, list_id
+
+
+def api(method, payload, token):
+    req = urllib.request.Request(
+        API + method,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            body = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        die(f"HTTP {e.code}：{e.read().decode('utf-8', 'replace')[:500]}")
+    except urllib.error.URLError as e:
+        die(f"連不上 Slack：{e.reason}")
+
+    # Slack 失敗時 HTTP 仍然回 200，錯誤藏在 body.ok
+    if not body.get("ok"):
+        err = body.get("error", "unknown")
+        print(f"Slack 回 ok:false，error = {err}", file=sys.stderr)
+        if err in ERROR_HINTS:
+            print(f"  → {ERROR_HINTS[err]}", file=sys.stderr)
+        print(json.dumps(body, ensure_ascii=False, indent=2), file=sys.stderr)
+        sys.exit(1)
+    return body
+
+
+def fetch_all():
+    """把整張表撈完，自動翻頁。"""
+    token, list_id = config()
+    items, cursor = [], None
+    while True:
+        payload = {"list_id": list_id, "limit": 100}
+        if cursor:
+            payload["cursor"] = cursor
+        body = api("slackLists.items.list", payload, token)
+        # 文件寫 items，items.info 那邊叫 record，兩種都接
+        items.extend(body.get("items") or body.get("records") or [])
+        cursor = (body.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor:
+            return items
+
+
+def plain(v):
+    """把一格的值壓成純文字。rich_text 是巢狀結構，遞迴撈出來。"""
+    out = []
+
+    def walk(x):
+        if isinstance(x, str):
+            out.append(x)
+        elif isinstance(x, (int, float, bool)):
+            out.append(str(x))
+        elif isinstance(x, list):
+            for i in x:
+                walk(i)
+        elif isinstance(x, dict):
+            if "text" in x:
+                walk(x["text"])
+            else:
+                for i in x.values():
+                    walk(i)
+
+    walk(v)
+    return " ".join(s for s in (t.strip() for t in out) if s)
+
+
+def flatten(item):
+    """一列 → {欄位名: 純文字}"""
+    row = {"_id": item.get("id", "")}
+    for f in item.get("fields") or []:
+        name = f.get("key") or f.get("column_id") or "?"
+        vals = [plain(f[k]) for k in VALUE_KEYS if f.get(k) not in (None, [], "")]
+        text = " | ".join(v for v in vals if v)
+        if text:
+            row[name] = text
+    return row
+
+
+# --- 指令 ---
+
+def cmd_raw():
+    print(json.dumps(fetch_all(), ensure_ascii=False, indent=2))
+
+
+def cmd_count():
+    print(len(fetch_all()))
+
+
+def cmd_sample():
+    items = fetch_all()
+    if not items:
+        die("這張表是空的（或 bot 讀不到任何一列）")
+    print(json.dumps(items[0], ensure_ascii=False, indent=2))
+
+
+def cmd_fields():
+    """探索欄位長怎樣：有哪些欄、各自用哪個型別鍵放值。"""
+    seen = {}
+    for item in fetch_all():
+        for f in item.get("fields") or []:
+            name = f.get("key") or f.get("column_id") or "?"
+            e = seen.setdefault(name, {
+                "key": f.get("key"),
+                "column_id": f.get("column_id"),
+                "n": 0,
+                "value_keys": set(),
+                "sample": "",
+            })
+            e["n"] += 1
+            for k in VALUE_KEYS:
+                if f.get(k) not in (None, [], ""):
+                    e["value_keys"].add(k)
+                    if not e["sample"]:
+                        e["sample"] = plain(f[k])[:80]
+    out = []
+    for name, e in seen.items():
+        out.append({
+            "name": name,
+            "key": e["key"],
+            "column_id": e["column_id"],
+            "有值的列數": e["n"],
+            "型別": sorted(e["value_keys"]),
+            "範例": e["sample"],
+        })
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+
+
+def cmd_todo():
+    """人和 agent 都看得懂的一行一列。"""
+    for row in (flatten(i) for i in fetch_all()):
+        rid = row.pop("_id", "")
+        cells = " ｜ ".join(f"{k}: {v}" for k, v in row.items())
+        print(f"[{rid}] {cells}")
+
+
+def cmd_json():
+    """壓平後的 JSON，給下游程式吃。"""
+    print(json.dumps([flatten(i) for i in fetch_all()], ensure_ascii=False, indent=2))
+
+
+def cmd_env():
+    load_env()
+    token = os.environ.get("SLACK_BOT_TOKEN", "")
+    list_id = os.environ.get("SLACK_LIST_ID", "")
+    masked = f"{token[:9]}…{token[-4:]}" if len(token) > 15 else ("(沒設定)" if not token else "(太短，可能貼錯)")
+    print(f".env       : {ROOT / '.env'}（{'有' if (ROOT / '.env').exists() else '不存在'}）")
+    print(f"TOKEN      : {masked}")
+    print(f"LIST_ID    : {list_id or '(沒設定)'}")
+
+
+COMMANDS = {
+    "todo": (cmd_todo, "一行一列，人看的（預設）"),
+    "json": (cmd_json, "壓平後的 JSON，給程式吃"),
+    "raw": (cmd_raw, "Slack 原始回應，完整不加工"),
+    "sample": (cmd_sample, "只印第一列的原始結構"),
+    "fields": (cmd_fields, "這張表有哪些欄位、各是什麼型別"),
+    "count": (cmd_count, "共幾列"),
+    "env": (cmd_env, "檢查設定有沒有讀到（token 會遮起來）"),
+}
+
+
+def main():
+    name = sys.argv[1] if len(sys.argv) > 1 else "todo"
+    if name in ("-h", "--help", "help") or name not in COMMANDS:
+        print("用法：slack-list <指令>\n")
+        for k, (_, desc) in COMMANDS.items():
+            print(f"  {k:<8} {desc}")
+        sys.exit(0 if name in ("-h", "--help", "help") else 1)
+    COMMANDS[name][0]()
+
+
+if __name__ == "__main__":
+    main()
