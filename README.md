@@ -1,9 +1,27 @@
 # work-helper
 
-把工作上的雜事包成指令，給人和 agent 共用。
+工作用的 agent 能力：指令放 `bin/`，自己寫的 skill 放 `skills/`。
+**離職就用不到的東西放這裡** —— 跨工作還要用的環境設定在 `dotfiles`，純文件在 `work-docs`。
 
-現在只有一件事：**讀 Slack 上那張「Bug/需求總表」**。
-其他（分析 repo、開 issue、跟人討論）等這個能用了再加。
+```
+bin/slack-list          讀 Slack 上那張「Bug/需求總表」
+skills/slack-todo/      ↑ 的 skill：讓 agent 知道有這個東西、什麼時候用
+skills/daily-worklog/   從 git commit 產工作日誌（產出寫進 work-docs）
+```
+
+Slack 那條線目前**只做讀取**，分析 repo、開 issue、跟人討論等能讀了再加。
+
+## 裝成 skill
+
+skill 沒有安裝程式，就是把資料夾拉線進 `~/.claude/skills/`：
+
+```bash
+for s in ~/code/work-helper/skills/*/; do
+  ln -sfn "$s" ~/.claude/skills/"$(basename "$s")"
+done
+```
+
+之後 `git pull` 就自動更新，跟 `dotfiles` 部署 `.zshrc` 是同一招。
 
 ## 需要什麼
 
