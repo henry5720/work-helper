@@ -45,6 +45,84 @@ cd ~/code/work-helper
 
 ---
 
+## 🔍 被派去查一件待辦時：交簡報，不是交 code
+
+被派來查某一列待辦的時候，**你的交付物是一份兩分鐘看得完的簡報，不是改動**。
+一個字都不要改。查完 `gh issue create`，簡報就是 body。
+
+````markdown
+<!-- slack-list-item: Rec0B… -->
+
+### 現況（我查到的）
+- 欄位定義在 frontend/src/.../ReturnTable.tsx:88
+- 有 3 個地方讀它：ReturnTable.tsx:120、ReturnDetail.tsx:45、api/return.ts:33
+
+### 我認為要做的
+刪掉欄位定義，同時處理那 3 個讀取點
+
+### 怎麼驗
+```bash
+npx vitest run src/app/modules/xxx
+npm run build          # 含 tsc --noEmit
+```
+畫面上：開 /returns，確認供應商欄位不見了，既有資料還打得開
+
+### 考慮過的做法（只有標 ⚠️ 才要寫）
+A. 前端直接刪 → 後端還回這欄位，多的資料被忽略
+B. 等後端一起拿掉 → 要跨 repo 排程
+選 A，理由：…
+
+### 我不確定的
+1. 後端 API 還會回這個欄位嗎？要一起拿掉還是先留著？
+
+### 判斷：⚠️ 需要你對齊
+````
+
+**交出去之前自己檢查兩件事**（少任何一個就是還沒做完，回去補）：
+
+1. 「現況」有沒有具體的 `檔案:行號`
+2. 有沒有「怎麼驗」，而且是**跑得起來的指令**
+
+### ✅ 還是 ⚠️：判準是「答案在哪」
+
+- **✅ 可以直接做** —— 答案全在 repo 裡，改動點列得完
+- **⚠️ 需要對齊** —— 有一件「他答了會改變做法」的事，而且要**指名是哪一件**
+
+⚠️ **「我不確定的」只准放「他答了會改變做法」的問題。**
+「我沒去查後端」不算 —— 那叫還沒查完，回去查。想不出這種問題就標 ✅，不要為了保險標 ⚠️。
+每份都標 ⚠️ 等於沒有標，真正需要他看的那幾件會被淹掉。
+
+跨 repo 的事用 subagent 去問一句話（「去 `~/code/teamsync-backend` 查 X，只回答有／沒有 + 檔案行號」），
+**不要把後端整包掛進來**，那會把 context 燒光還迷路。
+
+---
+
+## 🔑 開 issue 一定要先埋指紋
+
+**開單前必做，不是加分項。** 待辦從 Slack 進 GitHub 的流程裡，開 issue 的是 agent
+不是人，沒有人在那個位置擋重複，所以這步漏掉就一定會開出重複的單。
+
+```bash
+# 1. 先比對，任何一筆命中就不要開，去那張既有的 issue 上留言
+gh issue list --search "Rec0B…" --state all
+
+# 2. 沒命中才開，body 第一行埋指紋
+<!-- slack-list-item: Rec0B… -->
+```
+
+`Rec0B…` 就是 `todo` / `mine` 每列開頭印的那串。
+
+⚠️ **不要靠 GitHub 自己的重複偵測。** 那個只在網頁表單被證實，
+`gh issue create` 走不走得到官方沒講。當它不存在。
+
+issue 格式走 `~/code/teamsync-frontend` 的
+[`docs/guides/workflow/github-issue-standards.md`](../../../teamsync-frontend/docs/guides/workflow/github-issue-standards.md)
+與 [`docs/agents/issue-tracker.md`](../../../teamsync-frontend/docs/agents/issue-tracker.md)（`gh issue create --type` 是必要的），
+規格不足的掛 `needs-triage`。整套工作流見
+`~/code/work-docs/docs/ai/herdr/agent-fleet-workflow.md`。
+
+---
+
 ## 📣 回報
 
 **一列一串**：每個項目在 `SLACK_PROGRESS_CHANNEL` 有且只有一條討論串，
@@ -116,14 +194,4 @@ cd ~/code/work-helper
 
 ## 🚧 還沒定案的（不要自己發明）
 
-開 issue 這條線討論過但沒有結論，遇到時**問使用者**：
-
-- **顆粒度**：一列開幾張 issue？前後端要不要拆兩張？
-- **判準**：什麼樣的列算「規格夠清楚可以直接動工」？
-- **冪等性**：構想是把 record ID 寫進 issue body 當指紋
-  （`<!-- slack-list-item: <id> -->`），開單前先 `gh issue list --search` 比對。
-  **構想而已，還沒實作。**
-
-已經定的只有一條：issue 走 `~/code/teamsync-frontend` 的
-[`docs/guides/workflow/github-issue-standards.md`](../../../teamsync-frontend/docs/guides/workflow/github-issue-standards.md)，
-規格不足的掛 `needs-triage`。
+- **顆粒度**：一列開幾張 issue？前後端要不要拆兩張？討論過沒結論，遇到時**問使用者**。
