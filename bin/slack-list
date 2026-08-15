@@ -1,19 +1,45 @@
 #!/usr/bin/env python3
-"""讀取 Slack List 的內容。
+"""讀取 Slack List，並把處理進度回報到 Slack。
 
 只用標準函式庫，不需要安裝任何東西。
 設定放在 repo 根目錄的 .env（見 .env.example）。
+
+回報的形狀：一個項目一條討論串（thread），開在 SLACK_PROGRESS_CHANNEL。
+  progress  只回在串裡，不 @ 人、不改狀態 —— 中間進度，不吵人
+  ready     @ 指派對象 + broadcast 到 channel 主畫面，並把狀態改成「PM確認中」
+
+「改狀態」跟「發通知」綁在同一支指令裡，不是兩件事。
+拆開的話遲早會漏一次，而漏掉的症狀是表上寫 PM確認中 但沒人被通知，沒有任何徵兆。
+
+這支檔案沒有任何刪除 Slack 內容的指令，這是刻意的。
 """
 
+import argparse
 import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 API = "https://slack.com/api/"
+
+# record_id → thread。連結欄只有一格、而且 PM 可能已經放了別的東西，
+# 所以對應關係的正本在這裡，連結欄只是順手寫給人點的副本。
+THREADS_FILE = ROOT / "state" / "threads.json"
+
+# 這張表上用到的欄位，用「欄位名」去 schema 查 id —— 名字比 Col0B8… 好讀，
+# 而且改名了會當場報錯，不會默默寫到別欄去。
+COL_TITLE = "名稱"
+COL_ASSIGNEE = "指派對象"
+COL_STATUS = "狀態"
+COL_LINK = "連結"
+COL_FILE = "檔案"
+
+# ready 會把狀態設成這個。表上本來就在用，語意是「球在 PM 身上」。
+STATUS_READY = "PM確認中"
 
 # Slack List 的每一格會用這些鍵之一放值，看欄位型別而定
 VALUE_KEYS = [
@@ -69,6 +95,16 @@ def my_user_id():
     return uid
 
 
+def progress_channel():
+    load_env()
+    ch = os.environ.get("SLACK_PROGRESS_CHANNEL")
+    if not ch:
+        die("`.env` 裡沒有 SLACK_PROGRESS_CHANNEL。"
+            "建一個 channel、把 @work-helper 加進去，"
+            "點 channel 名稱 → 最下面「頻道 ID」，貼進 .env。")
+    return ch
+
+
 def api(method, payload, token):
     req = urllib.request.Request(
         API + method,
@@ -94,6 +130,29 @@ def api(method, payload, token):
         if err in ERROR_HINTS:
             print(f"  → {ERROR_HINTS[err]}", file=sys.stderr)
         print(json.dumps(body, ensure_ascii=False, indent=2), file=sys.stderr)
+        sys.exit(1)
+    return body
+
+
+def api_get(method, params, token):
+    """有幾支只吃 GET —— chat.getPermalink 用 POST 會回 ok:false 而且不給 error。"""
+    req = urllib.request.Request(
+        API + method + "?" + urllib.parse.urlencode(params),
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            body = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        die(f"HTTP {e.code}：{e.read().decode('utf-8', 'replace')[:500]}")
+    except urllib.error.URLError as e:
+        die(f"連不上 Slack：{e.reason}")
+    if not body.get("ok"):
+        err = body.get("error", "unknown")
+        print(f"Slack 回 ok:false（{method}），error = {err}", file=sys.stderr)
+        if err in ERROR_HINTS:
+            print(f"  → {ERROR_HINTS[err]}", file=sys.stderr)
         sys.exit(1)
     return body
 
@@ -147,6 +206,128 @@ def flatten(item):
         if text:
             row[name] = text
     return row
+
+
+# --- 回報用：查表 ---
+
+def schema(token, list_id):
+    """欄位定義。slackLists.info 不存在，schema 藏在 files.info 的 list_metadata 裡。"""
+    body = api_get("files.info", {"file": list_id}, token)
+    cols = ((body.get("file") or {}).get("list_metadata") or {}).get("schema") or []
+    by_name = {c.get("name"): c for c in cols}
+    for need in (COL_TITLE, COL_ASSIGNEE, COL_STATUS, COL_LINK, COL_FILE):
+        if need not in by_name:
+            die(f"這張表沒有「{need}」欄。有的是：{'、'.join(n for n in by_name if n)}")
+    return by_name
+
+
+def select_value(cols, col_name, label):
+    """選項的顯示文字 → 存進去的 Opt… 代碼。"""
+    choices = ((cols[col_name].get("options") or {}).get("choices")) or []
+    for c in choices:
+        if c.get("label") == label:
+            return c["value"]
+    have = "、".join(c.get("label", "") for c in choices)
+    die(f"「{col_name}」沒有「{label}」這個選項。現有：{have}\n"
+        "  → 選項只能在 Slack UI 加，API 加會回 missing required field: id。")
+
+
+def record(token, list_id, record_id):
+    """一列的原始結構。"""
+    body = api("slackLists.items.info", {"list_id": list_id, "id": record_id}, token)
+    return body.get("record") or body.get("item") or {}
+
+
+def cell(rec, column_id):
+    for f in rec.get("fields") or []:
+        if f.get("column_id") == column_id:
+            return f
+    return {}
+
+
+def record_title(rec, cols):
+    # 用 text 不用 rich_text —— plain() 遞迴 rich_text 會把 type / block_id
+    # 這些結構字串也一起撈出來，標題會變成「rich_text F2QiK rich_text_section 真正的標題」。
+    return (cell(rec, cols[COL_TITLE]["id"]).get("text") or "").strip() or "(無標題)"
+
+
+def record_assignees(rec, cols):
+    return cell(rec, cols[COL_ASSIGNEE]["id"]).get("user") or []
+
+
+def deep_link(list_id, record_id):
+    """表上單一列的深連結。API 不給 permalink，只能自己組。"""
+    team = os.environ.get("SLACK_TEAM_ID", "T0B54FC26FR")
+    return f"https://shuchenai-rdpm.slack.com/lists/{team}/{list_id}?record_id={record_id}"
+
+
+# --- 回報用：討論串的對應 ---
+
+def load_threads():
+    if not THREADS_FILE.exists():
+        return {}
+    return json.loads(THREADS_FILE.read_text(encoding="utf-8"))
+
+
+def save_thread(record_id, ts, permalink):
+    THREADS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data = load_threads()
+    data[record_id] = {"ts": ts, "permalink": permalink}
+    THREADS_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def open_thread(token, list_id, channel, record_id, rec, cols):
+    """回傳這一列的討論串 ts；還沒有就開一條。
+
+    正本是 state/threads.json。連結欄只在「本來是空的」時候才寫，
+    免得蓋掉 PM 自己放的東西（398 列裡有 15 列本來就有連結）。
+    """
+    known = load_threads().get(record_id)
+    if known:
+        return known["ts"], False
+
+    title = record_title(rec, cols)
+    link = deep_link(list_id, record_id)
+    body = api("chat.postMessage", {
+        "channel": channel,
+        "text": title,
+        "blocks": [{"type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*<{link}|{title}>*"}}],
+    }, token)
+    ts = body["ts"]
+    permalink = api_get(
+        "chat.getPermalink", {"channel": channel, "message_ts": ts}, token)["permalink"]
+    save_thread(record_id, ts, permalink)
+
+    if not cell(rec, cols[COL_LINK]["id"]).get("link"):
+        api("slackLists.items.update", {
+            "list_id": list_id, "id": record_id,
+            "cells": [{"row_id": record_id, "column_id": cols[COL_LINK]["id"],
+                       "link": [{"original_url": permalink}]}],
+        }, token)
+    return ts, True
+
+
+def upload_md(token, channel, thread_ts, path):
+    """把 md 傳進討論串，回傳 file_id。同一個 id 之後也放得進 list 的檔案欄。"""
+    p = Path(path)
+    if not p.exists():
+        die(f"找不到 {p}")
+    data = p.read_bytes()
+    slot = api_get("files.getUploadURLExternal",
+                   {"filename": p.name, "length": str(len(data))}, token)
+    req = urllib.request.Request(slot["upload_url"], data=data,
+                                 headers={"Content-Type": "application/octet-stream"})
+    try:
+        urllib.request.urlopen(req, timeout=60).read()
+    except urllib.error.URLError as e:
+        die(f"檔案上傳失敗：{e.reason}")
+    api("files.completeUploadExternal", {
+        "files": [{"id": slot["file_id"], "title": p.stem}],
+        "channel_id": channel, "thread_ts": thread_ts,
+    }, token)
+    return slot["file_id"]
 
 
 # --- 指令 ---
@@ -227,19 +408,114 @@ def cmd_mine():
     print(f"\n—— {scope}：{len(mine)} 列（全表 {len(rows)} 列）", file=sys.stderr)
 
 
+def cmd_progress(argv):
+    """中間進度：只回在討論串裡，不 @ 人、不改狀態。"""
+    ap = argparse.ArgumentParser(
+        prog="slack-list progress",
+        description="把一句進度回在該項目的討論串裡。不會 @ 任何人，也不改狀態。")
+    ap.add_argument("record_id", help="表上那一列的 ID（Rec… 開頭，`mine` 印在最前面）")
+    ap.add_argument("note", help="一句話說現在做到哪")
+    args = ap.parse_args(argv)
+
+    token, list_id = config()
+    channel = progress_channel()
+    cols = schema(token, list_id)
+    rec = record(token, list_id, args.record_id)
+    ts, opened = open_thread(token, list_id, channel, args.record_id, rec, cols)
+    api("chat.postMessage",
+        {"channel": channel, "thread_ts": ts, "text": args.note}, token)
+
+    print(f"已回報到討論串{'（新開的）' if opened else ''}：{record_title(rec, cols)}")
+    print(load_threads()[args.record_id]["permalink"])
+
+
+def cmd_ready(argv):
+    """可驗收：@ 指派對象 + broadcast 到 channel，並把狀態改成 PM確認中。"""
+    ap = argparse.ArgumentParser(
+        prog="slack-list ready",
+        description="通知 PM 可以驗收，並把狀態改成「%s」。兩件事一起做，不能只做一半。" % STATUS_READY,
+        epilog="例：slack-list ready Rec0B… "
+               "--changed '生產單建立時就佔料，完工才落帳' "
+               "--verify '建一張生產單，確認投入明細出現' "
+               "--verify '帳頁按確認完工，確認成品進來'")
+    ap.add_argument("record_id", help="表上那一列的 ID（Rec… 開頭）")
+    ap.add_argument("--changed", required=True, help="改了什麼，一兩句白話")
+    ap.add_argument("--verify", required=True, action="append", metavar="步驟",
+                    help="怎麼驗，一個步驟一個 --verify，可重複。至少要一個")
+    ap.add_argument("--md", metavar="檔案", help="複雜時附一份說明 md（可選）")
+    ap.add_argument("--quiet", action="store_true",
+                    help="不 @ 人、不 broadcast，只留在串裡。批次補狀態時用")
+    args = ap.parse_args(argv)
+
+    token, list_id = config()
+    channel = progress_channel()
+    cols = schema(token, list_id)
+    ready_opt = select_value(cols, COL_STATUS, STATUS_READY)
+    rec = record(token, list_id, args.record_id)
+    title = record_title(rec, cols)
+    link = deep_link(list_id, args.record_id)
+    ts, _ = open_thread(token, list_id, channel, args.record_id, rec, cols)
+
+    who = record_assignees(rec, cols)
+    mention = " ".join(f"<@{u}>" for u in who)
+    if not who and not args.quiet:
+        print(f"提醒：「{title}」沒有指派對象，這則不會 @ 到任何人。", file=sys.stderr)
+
+    head = (f"{mention} 可以驗收了 → <{link}|{title}>" if mention
+            else f"可以驗收了 → <{link}|{title}>")
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": head}},
+        {"type": "section",
+         "text": {"type": "mrkdwn", "text": f"*改了什麼*\n{args.changed}"}},
+        {"type": "rich_text", "elements": [
+            {"type": "rich_text_section",
+             "elements": [{"type": "text", "text": "怎麼驗", "style": {"bold": True}}]},
+            {"type": "rich_text_list", "style": "ordered", "elements": [
+                {"type": "rich_text_section",
+                 "elements": [{"type": "text", "text": v}]} for v in args.verify]},
+        ]},
+    ]
+    # 先發訊息、後改狀態。反過來的話訊息發失敗會留下「表上寫 PM確認中 但沒人被通知」，
+    # 那正是這支指令要防的事；這個順序最壞只會留下「通知了但狀態沒動」，看得見。
+    api("chat.postMessage", {
+        "channel": channel, "thread_ts": ts,
+        "reply_broadcast": not args.quiet,
+        "text": f"{title} 可以驗收了", "blocks": blocks,
+    }, token)
+
+    cells = [{"row_id": args.record_id, "column_id": cols[COL_STATUS]["id"],
+              "select": [ready_opt]}]
+    if args.md:
+        file_id = upload_md(token, channel, ts, args.md)
+        old = cell(rec, cols[COL_FILE]["id"]).get("attachment") or []
+        cells.append({"row_id": args.record_id, "column_id": cols[COL_FILE]["id"],
+                      "attachment": old + [file_id]})
+    api("slackLists.items.update",
+        {"list_id": list_id, "id": args.record_id, "cells": cells}, token)
+
+    print(f"已通知{'（quiet，沒 @ 人）' if args.quiet else ''}：{title}")
+    print(f"狀態 → {STATUS_READY}")
+    if args.md:
+        print(f"附件 → 討論串 + 「{COL_FILE}」欄：{args.md}")
+    print(load_threads()[args.record_id]["permalink"])
+
+
 def cmd_env():
     load_env()
     token = os.environ.get("SLACK_BOT_TOKEN", "")
     list_id = os.environ.get("SLACK_LIST_ID", "")
     my_id = os.environ.get("SLACK_MY_USER_ID", "")
+    channel = os.environ.get("SLACK_PROGRESS_CHANNEL", "")
     masked = f"{token[:9]}…{token[-4:]}" if len(token) > 15 else ("(沒設定)" if not token else "(太短，可能貼錯)")
     print(f".env       : {ROOT / '.env'}（{'有' if (ROOT / '.env').exists() else '不存在'}）")
     print(f"TOKEN      : {masked}")
     print(f"LIST_ID    : {list_id or '(沒設定)'}")
     print(f"MY_USER_ID : {my_id or '(沒設定，mine 指令會不能用)'}")
+    print(f"CHANNEL    : {channel or '(沒設定，progress / ready 會不能用)'}")
+    print(f"討論串對應 : {THREADS_FILE}（{len(load_threads())} 條）")
 
 
-COMMANDS = {
+READ_COMMANDS = {
     "todo": (cmd_todo, "一行一列，人看的（預設）"),
     "mine": (cmd_mine, "只印指派給我的列，可多帶一個關鍵字再過濾"),
     "json": (cmd_json, "壓平後的 JSON，給程式吃"),
@@ -250,15 +526,35 @@ COMMANDS = {
     "env": (cmd_env, "檢查設定有沒有讀到（token 會遮起來）"),
 }
 
+# 這幾支自己吃參數，各自有 --help
+WRITE_COMMANDS = {
+    "progress": (cmd_progress, "回一句進度到該項目的討論串，不吵人"),
+    "ready": (cmd_ready, f"通知可以驗收 + 狀態改成「{STATUS_READY}」"),
+}
+
+
+def usage():
+    print("用法：slack-list <指令> [參數]\n")
+    print("讀取：")
+    for k, (_, desc) in READ_COMMANDS.items():
+        print(f"  {k:<9} {desc}")
+    print("\n回報到 Slack（詳細參數看 `slack-list <指令> --help`）：")
+    for k, (_, desc) in WRITE_COMMANDS.items():
+        print(f"  {k:<9} {desc}")
+
 
 def main():
     name = sys.argv[1] if len(sys.argv) > 1 else "todo"
-    if name in ("-h", "--help", "help") or name not in COMMANDS:
-        print("用法：slack-list <指令>\n")
-        for k, (_, desc) in COMMANDS.items():
-            print(f"  {k:<8} {desc}")
-        sys.exit(0 if name in ("-h", "--help", "help") else 1)
-    COMMANDS[name][0]()
+    if name in ("-h", "--help", "help"):
+        usage()
+        sys.exit(0)
+    if name in WRITE_COMMANDS:
+        WRITE_COMMANDS[name][0](sys.argv[2:])
+        return
+    if name not in READ_COMMANDS:
+        usage()
+        sys.exit(1)
+    READ_COMMANDS[name][0]()
 
 
 if __name__ == "__main__":
