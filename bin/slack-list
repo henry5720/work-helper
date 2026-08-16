@@ -269,12 +269,35 @@ def load_threads():
     return json.loads(THREADS_FILE.read_text(encoding="utf-8"))
 
 
-def save_thread(record_id, ts, permalink):
+def write_threads(data):
     THREADS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    data = load_threads()
-    data[record_id] = {"ts": ts, "permalink": permalink}
     THREADS_FILE.write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def save_thread(record_id, ts, permalink, title):
+    data = load_threads()
+    entry = data.setdefault(record_id, {})
+    # title 只是給人看的標籤，過期無妨；不存 敘述 和 issue title，
+    # 那兩個人會當內容讀，存了就是養一份會騙人的副本。
+    entry.update({"title": title, "ts": ts, "permalink": permalink})
+    entry.setdefault("issues", [])
+    write_threads(data)
+
+
+def save_issues(record_id, numbers):
+    """把 issue 編號記進快取。append 不覆蓋，重複的不再加一次。
+
+    這是**快取不是正本** —— 正本是 issue body 裡那行 Slack 來源。
+    忘了呼叫也不會壞，回去 `gh issue list --search "<record_id>" --state all` 就有。
+    """
+    data = load_threads()
+    entry = data.setdefault(record_id, {"issues": []})
+    known = entry.setdefault("issues", [])
+    added = [n for n in numbers if n not in known]
+    known.extend(added)
+    write_threads(data)
+    return added
 
 
 def open_thread(token, list_id, channel, record_id, rec, cols):
@@ -298,7 +321,7 @@ def open_thread(token, list_id, channel, record_id, rec, cols):
     ts = body["ts"]
     permalink = api_get(
         "chat.getPermalink", {"channel": channel, "message_ts": ts}, token)["permalink"]
-    save_thread(record_id, ts, permalink)
+    save_thread(record_id, ts, permalink, title)
 
     if not cell(rec, cols[COL_LINK]["id"]).get("link"):
         api("slackLists.items.update", {
@@ -429,6 +452,33 @@ def cmd_progress(argv):
     print(load_threads()[args.record_id]["permalink"])
 
 
+def cmd_link(argv):
+    """把 issue 編號記進快取；不帶編號就印出這一列已知的東西。"""
+    ap = argparse.ArgumentParser(
+        prog="slack-list link",
+        description="記下某一列對到哪幾張 issue（快取）。不帶編號就印出已知的。",
+        epilog="這是快取不是正本。正本是 issue body 裡那行 Slack 來源；"
+               "忘了記也不會壞，回去 gh issue list --search \"<record_id>\" --state all 就有。")
+    ap.add_argument("record_id", help="表上那一列的 ID（Rec… 開頭）")
+    ap.add_argument("issues", nargs="*", type=int, metavar="編號",
+                    help="issue 編號，可以一次給多個。一列預設一張，拆單才會有多張")
+    args = ap.parse_args(argv)
+
+    if not args.issues:
+        entry = load_threads().get(args.record_id)
+        if not entry:
+            print(f"{args.record_id} 沒有任何記錄（還沒開過討論串）")
+            return
+        print(f"{entry.get('title') or '(無標題)'}")
+        print(f"  討論串 {entry.get('permalink') or '(無)'}")
+        print(f"  issue  {entry.get('issues') or '(還沒記，去 gh issue list --search 查)'}")
+        return
+
+    added = save_issues(args.record_id, args.issues)
+    known = load_threads()[args.record_id]["issues"]
+    print(f"新記 {added or '(都已經記過了)'}；這一列目前 {known}")
+
+
 def cmd_ready(argv):
     """可驗收：@ 指派對象 + broadcast 到 channel，並把狀態改成 PM確認中。"""
     ap = argparse.ArgumentParser(
@@ -493,11 +543,17 @@ def cmd_ready(argv):
     api("slackLists.items.update",
         {"list_id": list_id, "id": args.record_id, "cells": cells}, token)
 
+    entry = load_threads()[args.record_id]
     print(f"已通知{'（quiet，沒 @ 人）' if args.quiet else ''}：{title}")
     print(f"狀態 → {STATUS_READY}")
     if args.md:
         print(f"附件 → 討論串 + 「{COL_FILE}」欄：{args.md}")
-    print(load_threads()[args.record_id]["permalink"])
+    # 一列預設一張 issue，拆單才會有多張。這裡只把快取裡的印出來讓人看見 ——
+    # 「是不是全關了」要自己 gh issue list --search 查，這支腳本不碰 GitHub。
+    issues = entry.get("issues") or []
+    if len(issues) > 1:
+        print(f"⚠️ 這一列記了 {len(issues)} 張 issue {issues}——確認都關了嗎？")
+    print(entry["permalink"])
 
 
 def cmd_env():
@@ -530,6 +586,7 @@ READ_COMMANDS = {
 WRITE_COMMANDS = {
     "progress": (cmd_progress, "回一句進度到該項目的討論串，不吵人"),
     "ready": (cmd_ready, f"通知可以驗收 + 狀態改成「{STATUS_READY}」"),
+    "link": (cmd_link, "記下這一列對到哪幾張 issue（快取），不帶編號就印出已知的"),
 }
 
 

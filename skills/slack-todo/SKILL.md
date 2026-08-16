@@ -56,7 +56,7 @@ cd ~/code/work-helper
 一個字都不要改。查完 `gh issue create`，簡報就是 body。
 
 ````markdown
-<!-- slack-list-item: Rec0B… -->
+> Slack 來源：[Rec0B…](https://shuchenai-rdpm.slack.com/lists/T0B54FC26FR/<LIST_ID>?record_id=Rec0B…)
 
 ### 現況（我查到的）
 - 欄位定義在 frontend/src/.../ReturnTable.tsx:88
@@ -111,14 +111,34 @@ B. 等後端一起拿掉 → 要跨 repo 排程
 # 1. 先比對，任何一筆命中就不要開，去那張既有的 issue 上留言
 gh issue list --search "Rec0B…" --state all
 
-# 2. 沒命中才開，body 第一行埋指紋
-<!-- slack-list-item: Rec0B… -->
+# 2. 沒命中才開。body 第一行放這個，然後才是簡報
+> Slack 來源：[Rec0B…](https://shuchenai-rdpm.slack.com/lists/T0B54FC26FR/<LIST_ID>?record_id=Rec0B…)
+
+# 3. 開完把編號記進快取
+../../bin/slack-list link Rec0B… <issue 編號>
 ```
 
-`Rec0B…` 就是 `todo` / `mine` 每列開頭印的那串。
+`Rec0B…` 就是 `todo` / `mine` 每列開頭印的那串。`<LIST_ID>` 從 `.env` 的 `SLACK_LIST_ID` 拿。
+
+⚠️ **指紋要「看得見」，不要藏在 `<!-- -->` 裡。** GitHub 搜尋會不會索引 HTML 註解沒有定論，
+而整套去重就靠這個查詢，賭不起。放成可見的引言行還有兩個好處：你點得回 Slack 那列，
+別人看 issue 也知道來源。
 
 ⚠️ **不要靠 GitHub 自己的重複偵測。** 那個只在網頁表單被證實，
 `gh issue create` 走不走得到官方沒講。當它不存在。
+
+### 一列預設一張 issue
+
+拆單是**例外**（顆粒度還沒定案，見最下面）。真的拆了才做這兩件：
+
+- `slack-list link Rec0B… 1801 1802 1803` 一次記進去
+- 在討論串貼一則「拆成 #1801 #1802 #1803」，讓後面的人看得到
+
+### 快取跟正本
+
+`state/threads.json` 的 `issues` 是**快取**，正本是 issue body 那行。
+忘了 `link` 不會壞 —— 回去 `gh issue list --search` 就有，查到再 `link` 補記。
+**快取可以錯，正本不能錯。**
 
 issue 格式走 `~/code/teamsync-frontend` 的
 `docs/guides/workflow/github-issue-standards.md`
@@ -154,6 +174,9 @@ issue 格式走 `~/code/teamsync-frontend` 的
 - **`ready` 只在使用者說可以驗收時跑。** 它會推播吵到 PM。
   你自己覺得寫完了不算；測試綠了也不算；**沒 push 的 commit 不算**。
   不確定就跑 `progress`，那個不吵人。
+  **這一列如果拆成多張 issue，要全部關掉才算** —— 跑之前先
+  `gh issue list --search "Rec0B…" --state open`，有東西回來就不要跑。
+  （`ready` 自己不查 GitHub，它只會把快取裡記到的編號印出來提醒你。）
 - **`--verify` 寫得出來才算做完。** 那是 PM 唯一真正需要的東西。
   「測試一下」等於沒寫。要寫成「開哪個頁面 → 做什麼 → 看到什麼」。
 - **`--changed` 用白話。** PM 不看 commit，不要貼 SHA 或函式名。
