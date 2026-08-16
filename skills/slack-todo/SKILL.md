@@ -11,6 +11,11 @@ PM（chieh）把 bug 與需求記在 Slack 的一張 List：**Bug/需求總表**
 **不要自己組 curl，也不要用 Slack MCP 做這件事。** 腳本已經處理翻頁、
 錯誤翻譯、欄位對應、討論串對應。繞過它就是重寫一次，而且會寫錯。
 
+> 📁 **路徑假設**：這份文件裡的 `~/code/xxx` 假設所有 repo 都是 `~/code/` 底下的兄弟目錄
+> （`work-helper`、`teamsync-frontend`、`teamsync-backend`、`work-docs`）。
+> **這台機器不是這樣擺的話，`ls ~/code` 看一眼；還是找不到就問使用者，不要猜。**
+> 換過機器（例如手機的 Termux）路徑一定不一樣。
+
 ---
 
 ## 🚫 先講會做壞的三件事
@@ -41,7 +46,7 @@ cd ~/code/work-helper
 每一列開頭的 `[Rec0B…]` 就是 record ID，回報時要用。
 
 跑不動時先 `./bin/slack-list env`（確認 `.env` 讀到了）再 `count`（確認通得到）。
-`.env` 沒設定會直接報哪個變數缺，照 [repo README](../../README.md) 設定。
+`.env` 沒設定會直接報哪個變數缺，照 `work-helper/README.md` 設定。
 
 ---
 
@@ -116,8 +121,8 @@ gh issue list --search "Rec0B…" --state all
 `gh issue create` 走不走得到官方沒講。當它不存在。
 
 issue 格式走 `~/code/teamsync-frontend` 的
-[`docs/guides/workflow/github-issue-standards.md`](../../../teamsync-frontend/docs/guides/workflow/github-issue-standards.md)
-與 [`docs/agents/issue-tracker.md`](../../../teamsync-frontend/docs/agents/issue-tracker.md)（`gh issue create --type` 是必要的），
+`docs/guides/workflow/github-issue-standards.md`
+與 `docs/agents/issue-tracker.md`（`gh issue create --type` 是必要的），
 規格不足的掛 `needs-triage`。整套工作流見
 `~/code/work-docs/docs/ai/herdr/agent-fleet-workflow.md`。
 
