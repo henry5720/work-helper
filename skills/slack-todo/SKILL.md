@@ -185,6 +185,19 @@ issue 格式走 `~/code/teamsync-frontend` 的
 
 沒有任何刪除指令。要撤回已發的訊息，跟使用者說，讓他自己刪。
 
+### 讀回覆
+
+PM 在討論串裡回了什麼，**只有這裡看得到** —— List 項目的原生留言串沒有 API。
+
+```bash
+./bin/slack-list replies            # 掃所有已知的串，只列「有人回過」的
+./bin/slack-list replies Rec0B…     # 看某一條串（預設只印別人回的）
+./bin/slack-list replies Rec0B… --all   # 連 bot 自己發的也印
+```
+
+**使用者問「PM 有沒有回我」「有什麼新回覆」就跑不帶參數那個。**
+不要自己去開 Slack MCP 讀 channel —— 那會撈到一堆跟待辦無關的訊息。
+
 ---
 
 ## 🗂️ 這張表長什麼樣

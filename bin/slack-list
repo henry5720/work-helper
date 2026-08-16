@@ -21,6 +21,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -452,6 +453,78 @@ def cmd_progress(argv):
     print(load_threads()[args.record_id]["permalink"])
 
 
+def thread_messages(token, channel, ts):
+    """一條串的全部訊息（含主訊息），自動翻頁。"""
+    out, cursor = [], None
+    while True:
+        params = {"channel": channel, "ts": ts, "limit": 200}
+        if cursor:
+            params["cursor"] = cursor
+        body = api_get("conversations.replies", params, token)
+        out.extend(body.get("messages") or [])
+        cursor = (body.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor:
+            return out
+
+
+def is_ours(msg):
+    """bot 自己發的。人回的訊息沒有 bot_id。"""
+    return bool(msg.get("bot_id"))
+
+
+def when(msg):
+    stamp = float(msg.get("ts", 0))
+    return datetime.fromtimestamp(stamp).strftime("%m/%d %H:%M")
+
+
+def cmd_replies(argv):
+    """讀討論串。PM 回了什麼，只有這裡看得到 —— List 項目的原生留言串沒有 API。"""
+    ap = argparse.ArgumentParser(
+        prog="slack-list replies",
+        description="讀某一列討論串的內容。不帶 record_id 就掃過所有已知的串，"
+                    "只列出「有人回過」的那幾條。")
+    ap.add_argument("record_id", nargs="?", help="表上那一列的 ID（Rec… 開頭）")
+    ap.add_argument("--all", action="store_true",
+                    help="連 bot 自己發的也印出來（預設只印別人回的）")
+    args = ap.parse_args(argv)
+
+    token, _ = config()
+    channel = progress_channel()
+    threads = load_threads()
+
+    if not args.record_id:
+        found = 0
+        for rid, entry in threads.items():
+            if not entry.get("ts"):
+                continue
+            others = [m for m in thread_messages(token, channel, entry["ts"])
+                      if not is_ours(m)]
+            if others:
+                found += 1
+                print(f"[{rid}] {entry.get('title') or '(無標題)'} —— {len(others)} 則回覆")
+                print(f"  最後一則 {when(others[-1])}：{(others[-1].get('text') or '')[:60]}")
+                print(f"  {entry.get('permalink') or ''}")
+        print(f"\n—— 掃了 {len(threads)} 條串，{found} 條有人回過", file=sys.stderr)
+        return
+
+    entry = threads.get(args.record_id)
+    if not entry or not entry.get("ts"):
+        die(f"{args.record_id} 還沒有討論串。先跑一次 progress 或 ready。")
+
+    msgs = thread_messages(token, channel, entry["ts"])
+    shown = msgs if args.all else [m for m in msgs if not is_ours(m)]
+    print(f"{entry.get('title') or '(無標題)'}　{entry['permalink']}")
+    if not shown:
+        print("（沒有人回過。加 --all 看 bot 自己發的。）")
+        return
+    for m in shown:
+        who = "bot" if is_ours(m) else f"<@{m.get('user', '?')}>"
+        print(f"\n── {when(m)} {who}")
+        files = [f.get("name") or f.get("title") or f.get("id")
+                 for f in (m.get("files") or [])]
+        print(m.get("text") or (f"[附件] {'、'.join(files)}" if files else "(沒有純文字內容)"))
+
+
 def cmd_link(argv):
     """把 issue 編號記進快取；不帶編號就印出這一列已知的東西。"""
     ap = argparse.ArgumentParser(
@@ -587,6 +660,7 @@ WRITE_COMMANDS = {
     "progress": (cmd_progress, "回一句進度到該項目的討論串，不吵人"),
     "ready": (cmd_ready, f"通知可以驗收 + 狀態改成「{STATUS_READY}」"),
     "link": (cmd_link, "記下這一列對到哪幾張 issue（快取），不帶編號就印出已知的"),
+    "replies": (cmd_replies, "讀討論串；不帶 record_id 就掃出「有人回過」的那幾條"),
 }
 
 

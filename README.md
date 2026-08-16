@@ -90,6 +90,23 @@ PM 收到的就只是一句「可以驗收了」，然後他會回頭問你。
 
 `--quiet` 不 `@` 人也不 broadcast，批次補狀態時用。
 
+讀回覆 —— PM 在串裡回了什麼，只有這裡看得到：
+
+```bash
+bin/slack-list replies            # 掃所有串，只列「有人回過」的
+bin/slack-list replies Rec0B…     # 看某一條（--all 連 bot 自己發的也印）
+```
+
+開完 issue 順手記一筆，之後查詢不用每次都搜：
+
+```bash
+bin/slack-list link Rec0B… 1801   # 拆單才會有多個編號
+bin/slack-list link Rec0B…        # 不帶編號＝印出已知的
+```
+
+這是**快取不是正本**。正本是 issue body 第一行那句可見的 Slack 來源；
+忘了 `link` 也不會壞，回去 `gh issue list --search "Rec0B…" --state all` 就有。
+
 第一次對某一列下 `progress` 或 `ready` 就會開串，之後都回同一條。
 對應存在 `state/threads.json`；**該列的「連結」欄本來是空的**才會順手寫一份
 給人點 —— PM 自己放的連結不會被蓋掉（398 列裡有 15 列本來就有連結）。
