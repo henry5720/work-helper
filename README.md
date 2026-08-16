@@ -32,7 +32,8 @@ opencode 官方文件列的搜尋路徑包含 `~/.agents/skills/*/SKILL.md`、
 ## 需要什麼
 
 - Python 3（標準函式庫就夠，不用裝套件）
-- 一個 Slack app，scope 只要 `lists:read`
+- 一個 Slack app。只讀的話 `lists:read` 就夠；要回報進度還需要
+  `lists:write`、`chat:write`、`files:write`，私人 channel 再加 `groups:read` + `groups:history`
 - 那張 List 要分享給這個 app，不然會回 `not_found`
 
 ## 設定
@@ -138,7 +139,7 @@ Slack 失敗時 HTTP 還是回 200，錯誤藏在 body 的 `ok:false`。腳本�
 
 - `fields` 跑出來之前，`todo` 印的欄位名是 Slack 給的原始 key，不一定好看。看過真實資料再調。
 - List item 的**留言串**讀不到 —— `slackLists.*` 沒有任何 comment 相關的 method，item 的回應裡也沒有 `thread_ts` / `channel`。有些項目的真正規格全在留言裡（`敘述` 欄只有「功能...」），那些只能靠人補。`progress` / `ready` 的討論串是繞路，不是把留言串接通了。
-- 沒有 Events API，只能定時輪詢。PM 在討論串裡回了什麼，得自己跑 `conversations.replies` 去撈，bot 不會被主動叫醒。
+- 沒有 Events API，只能定時輪詢 —— **bot 不會被主動叫醒**。PM 在討論串裡回了什麼要自己去問（`slack-list replies`），不會有人通知你。
 - 表的 schema 改不動：加欄位、加選項都回 `missing required field: id`（新元素的 id 只有 Slack 發得出來）。要動欄位只能去 UI。
 - `conversations.rename` 比 UI 嚴格 —— 注音符號會被擋，而且回的是誤導的 `name_taken`。改 channel 名走 UI。
 - 沒有轉移頻道管理員的 API（`conversations.setManagers` 之類全是 `unknown_method`，`admin.*` 要 Enterprise Grid）。channel 讓自己建，不要讓 bot 建。
