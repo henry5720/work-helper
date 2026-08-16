@@ -12,13 +12,20 @@ state/threads.json      record_id → 討論串，由 progress / ready 自己維
 
 ## 裝成 skill
 
-skill 沒有安裝程式，就是把資料夾拉線進 `~/.claude/skills/`：
+skill 沒有安裝程式，就是把資料夾拉線進去。**拉兩個地方**：
 
 ```bash
 for s in ~/code/work-helper/skills/*/; do
-  ln -sfn "$s" ~/.claude/skills/"$(basename "$s")"
+  n="$(basename "$s")"
+  ln -sfn "$s" ~/.agents/skills/"$n"    # 工具中立層，opencode 讀這裡
+  ln -sfn "$s" ~/.claude/skills/"$n"    # Claude Code 讀這裡
 done
 ```
+
+`~/.agents/skills/` 是跨工具的共用位置（`npx skills` 裝的東西也在那）。
+opencode 官方文件列的搜尋路徑包含 `~/.agents/skills/*/SKILL.md`、
+`~/.claude/skills/*/SKILL.md` 和 `~/.config/opencode/skills/*/SKILL.md`，
+所以兩邊都拉最保險 —— 不用去賭它跟不跟隨 symlink。
 
 之後 `git pull` 就自動更新，跟 `dotfiles` 部署 `.zshrc` 是同一招。
 
