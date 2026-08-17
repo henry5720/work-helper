@@ -4,9 +4,10 @@
 只用標準函式庫，不需要安裝任何東西。
 設定放在 repo 根目錄的 .env（見 .env.example）。
 
-回報的形狀：一個項目一條討論串（thread），開在 SLACK_PROGRESS_CHANNEL。
+回報的形狀：寫進該列**原生的 item 留言串** —— PM 本來就在那裡講話。
+Slack 在建列時就替每一列開好了串，這支工具只查不建（推導方式見 docs/adr/0001）。
   progress  只回在串裡，不 @ 人、不改狀態 —— 中間進度，不吵人
-  ready     @ 指派對象 + broadcast 到 channel 主畫面，並把狀態改成「PM確認中」
+  ready     @ 回報對象（把這列寫上表的人），並把狀態改成「PM確認中」
 
 「改狀態」跟「發通知」綁在同一支指令裡，不是兩件事。
 拆開的話遲早會漏一次，而漏掉的症狀是表上寫 PM確認中 但沒人被通知，沒有任何徵兆。
@@ -27,16 +28,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 API = "https://slack.com/api/"
 
-# record_id → thread。連結欄只有一格、而且 PM 可能已經放了別的東西，
-# 所以對應關係的正本在這裡，連結欄只是順手寫給人點的副本。
-THREADS_FILE = ROOT / "state" / "threads.json"
-
 # 這張表上用到的欄位，用「欄位名」去 schema 查 id —— 名字比 Col0B8… 好讀，
 # 而且改名了會當場報錯，不會默默寫到別欄去。
+# 「連結」欄不在這裡 —— 那格是 PM 放外部參考資料的地方（Google Docs、Figma…），
+# 這支工具不寫它。
 COL_TITLE = "名稱"
-COL_ASSIGNEE = "指派對象"
 COL_STATUS = "狀態"
-COL_LINK = "連結"
 COL_FILE = "檔案"
 
 # ready 會把狀態設成這個。表上本來就在用，語意是「球在 PM 身上」。
@@ -96,14 +93,13 @@ def my_user_id():
     return uid
 
 
-def progress_channel():
-    load_env()
-    ch = os.environ.get("SLACK_PROGRESS_CHANNEL")
-    if not ch:
-        die("`.env` 裡沒有 SLACK_PROGRESS_CHANNEL。"
-            "建一個 channel、把 @work-helper 加進去，"
-            "點 channel 名稱 → 最下面「頻道 ID」，貼進 .env。")
-    return ch
+def comment_channel(list_id):
+    """item 留言串住的 channel —— list id 開頭的 F 換成 C。
+
+    沒有官方文件，是從 search.messages 回傳的 channel id 反推的（docs/adr/0001）。
+    Slack 哪天改掉，conversations.info 會回 channel_not_found，不會靜默失敗。
+    """
+    return "C" + list_id[1:]
 
 
 def api(method, payload, token):
@@ -216,7 +212,7 @@ def schema(token, list_id):
     body = api_get("files.info", {"file": list_id}, token)
     cols = ((body.get("file") or {}).get("list_metadata") or {}).get("schema") or []
     by_name = {c.get("name"): c for c in cols}
-    for need in (COL_TITLE, COL_ASSIGNEE, COL_STATUS, COL_LINK, COL_FILE):
+    for need in (COL_TITLE, COL_STATUS, COL_FILE):
         if need not in by_name:
             die(f"這張表沒有「{need}」欄。有的是：{'、'.join(n for n in by_name if n)}")
     return by_name
@@ -252,8 +248,10 @@ def record_title(rec, cols):
     return (cell(rec, cols[COL_TITLE]["id"]).get("text") or "").strip() or "(無標題)"
 
 
-def record_assignees(rec, cols):
-    return cell(rec, cols[COL_ASSIGNEE]["id"]).get("user") or []
+def record_reporter(rec):
+    """該 @ 的人＝把這一列寫上表的人，不是「指派對象」（那是你自己）。
+    Slack 給的 created_by 逐列準確，不用另外維護一份「模組 → 誰驗收」對照表。"""
+    return rec.get("created_by") or ""
 
 
 def deep_link(list_id, record_id):
@@ -262,79 +260,58 @@ def deep_link(list_id, record_id):
     return f"https://shuchenai-rdpm.slack.com/lists/{team}/{list_id}?record_id={record_id}"
 
 
-# --- 回報用：討論串的對應 ---
+# --- 回報用：找到那一列的留言串 ---
 
-def load_threads():
-    if not THREADS_FILE.exists():
-        return {}
-    return json.loads(THREADS_FILE.read_text(encoding="utf-8"))
+def item_threads(token, list_id):
+    """record_id → 該列留言串的 parent 訊息。
 
+    parent 由 USLACKBOT 發、`subtype: list_record_comment`，record id 在
+    `slack_list.list_record_id` 裡。Slack 在建列時就開好了（實測 398 列全部都有），
+    所以這是**查**不是建 —— 沒有任何情況需要我們自己開串。
 
-def write_threads(data):
-    THREADS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    THREADS_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-
-def save_thread(record_id, ts, permalink, title):
-    data = load_threads()
-    entry = data.setdefault(record_id, {})
-    # title 只是給人看的標籤，過期無妨；不存 敘述 和 issue title，
-    # 那兩個人會當內容讀，存了就是養一份會騙人的副本。
-    entry.update({"title": title, "ts": ts, "permalink": permalink})
-    entry.setdefault("issues", [])
-    write_threads(data)
-
-
-def save_issues(record_id, numbers):
-    """把 issue 編號記進快取。append 不覆蓋，重複的不再加一次。
-
-    這是**快取不是正本** —— 正本是 issue body 裡那行 Slack 來源。
-    忘了呼叫也不會壞，回去 `gh issue list --search "<record_id>" --state all` 就有。
+    沒有快取，也不該有：這份對應關係 Slack 自己就是正本，存一份副本只會過期。
+    掃完整個 channel 大約三次 API。
     """
-    data = load_threads()
-    entry = data.setdefault(record_id, {"issues": []})
-    known = entry.setdefault("issues", [])
-    added = [n for n in numbers if n not in known]
-    known.extend(added)
-    write_threads(data)
-    return added
+    channel = comment_channel(list_id)
+    out, cursor = {}, None
+    while True:
+        params = {"channel": channel, "limit": 200}
+        if cursor:
+            params["cursor"] = cursor
+        body = api_get("conversations.history", params, token)
+        for m in body.get("messages") or []:
+            rid = (m.get("slack_list") or {}).get("list_record_id")
+            if rid:
+                out[rid] = m
+        cursor = (body.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor:
+            return out
 
 
-def open_thread(token, list_id, channel, record_id, rec, cols):
-    """回傳這一列的討論串 ts；還沒有就開一條。
+def item_thread_ts(token, list_id, record_id):
+    parent = item_threads(token, list_id).get(record_id)
+    if not parent:
+        die(f"在 {comment_channel(list_id)} 找不到 {record_id} 的留言串。\n"
+            "  → 每一列都該有，找不到通常是 record_id 打錯了。")
+    return parent["ts"]
 
-    正本是 state/threads.json。連結欄只在「本來是空的」時候才寫，
-    免得蓋掉 PM 自己放的東西（398 列裡有 15 列本來就有連結）。
-    """
-    known = load_threads().get(record_id)
-    if known:
-        return known["ts"], False
 
-    title = record_title(rec, cols)
-    link = deep_link(list_id, record_id)
-    body = api("chat.postMessage", {
-        "channel": channel,
-        "text": title,
-        "blocks": [{"type": "section",
-                    "text": {"type": "mrkdwn", "text": f"*<{link}|{title}>*"}}],
-    }, token)
-    ts = body["ts"]
-    permalink = api_get(
-        "chat.getPermalink", {"channel": channel, "message_ts": ts}, token)["permalink"]
-    save_thread(record_id, ts, permalink, title)
+def titles(items):
+    """record_id → 名稱。給 replies 印標題用。"""
+    out = {}
+    for it in items:
+        for f in it.get("fields") or []:
+            if f.get("key") == "name":
+                out[it.get("id", "")] = (f.get("text") or "").strip()
+    return out
 
-    if not cell(rec, cols[COL_LINK]["id"]).get("link"):
-        api("slackLists.items.update", {
-            "list_id": list_id, "id": record_id,
-            "cells": [{"row_id": record_id, "column_id": cols[COL_LINK]["id"],
-                       "link": [{"original_url": permalink}]}],
-        }, token)
-    return ts, True
+
+def bot_user_id(token):
+    return api_get("auth.test", {}, token).get("user_id", "")
 
 
 def upload_md(token, channel, thread_ts, path):
-    """把 md 傳進討論串，回傳 file_id。同一個 id 之後也放得進 list 的檔案欄。"""
+    """把 md 傳進留言串，回傳 file_id。同一個 id 之後也放得進 list 的檔案欄。"""
     p = Path(path)
     if not p.exists():
         die(f"找不到 {p}")
@@ -433,24 +410,24 @@ def cmd_mine():
 
 
 def cmd_progress(argv):
-    """中間進度：只回在討論串裡，不 @ 人、不改狀態。"""
+    """中間進度：只回在留言串裡，不 @ 人、不改狀態。"""
     ap = argparse.ArgumentParser(
         prog="slack-list progress",
-        description="把一句進度回在該項目的討論串裡。不會 @ 任何人，也不改狀態。")
+        description="把一句進度回在該列的 item 留言串裡。不會 @ 任何人，也不改狀態。")
     ap.add_argument("record_id", help="表上那一列的 ID（Rec… 開頭，`mine` 印在最前面）")
     ap.add_argument("note", help="一句話說現在做到哪")
     args = ap.parse_args(argv)
 
     token, list_id = config()
-    channel = progress_channel()
+    channel = comment_channel(list_id)
     cols = schema(token, list_id)
     rec = record(token, list_id, args.record_id)
-    ts, opened = open_thread(token, list_id, channel, args.record_id, rec, cols)
+    ts = item_thread_ts(token, list_id, args.record_id)
     api("chat.postMessage",
         {"channel": channel, "thread_ts": ts, "text": args.note}, token)
 
-    print(f"已回報到討論串{'（新開的）' if opened else ''}：{record_title(rec, cols)}")
-    print(load_threads()[args.record_id]["permalink"])
+    print(f"已回報：{record_title(rec, cols)}")
+    print(deep_link(list_id, args.record_id))
 
 
 def thread_messages(token, channel, ts):
@@ -472,48 +449,57 @@ def is_ours(msg):
     return bool(msg.get("bot_id"))
 
 
+def is_parent(msg):
+    """留言串的 parent 是 Slack 自己塞的佔位訊息（文字固定是 A comment was added）。"""
+    return msg.get("subtype") == "list_record_comment"
+
+
 def when(msg):
     stamp = float(msg.get("ts", 0))
     return datetime.fromtimestamp(stamp).strftime("%m/%d %H:%M")
 
 
 def cmd_replies(argv):
-    """讀討論串。PM 回了什麼，只有這裡看得到 —— List 項目的原生留言串沒有 API。"""
+    """讀 item 留言串 —— PM 講的話都在這裡。"""
     ap = argparse.ArgumentParser(
         prog="slack-list replies",
-        description="讀某一列討論串的內容。不帶 record_id 就掃過所有已知的串，"
-                    "只列出「有人回過」的那幾條。")
+        description="讀某一列 item 留言串的內容。不帶 record_id 就掃過整張表，"
+                    "只列出「有別人回過」的那幾列。")
     ap.add_argument("record_id", nargs="?", help="表上那一列的 ID（Rec… 開頭）")
     ap.add_argument("--all", action="store_true",
                     help="連 bot 自己發的也印出來（預設只印別人回的）")
     args = ap.parse_args(argv)
 
-    token, _ = config()
-    channel = progress_channel()
-    threads = load_threads()
+    token, list_id = config()
+    channel = comment_channel(list_id)
 
     if not args.record_id:
+        # parent 訊息本身就帶 reply_count / reply_users / latest_reply，
+        # 所以掃全表不用逐條打開 —— 開 398 條串會直接撞到限流。
+        me = bot_user_id(token)
+        name_of = titles(fetch_all())
+        parents = item_threads(token, list_id)
         found = 0
-        for rid, entry in threads.items():
-            if not entry.get("ts"):
+        for rid, p in sorted(parents.items(),
+                             key=lambda kv: kv[1].get("latest_reply") or "", reverse=True):
+            if rid not in name_of:      # 表上已經刪掉的列，parent 還留著
                 continue
-            others = [m for m in thread_messages(token, channel, entry["ts"])
-                      if not is_ours(m)]
-            if others:
-                found += 1
-                print(f"[{rid}] {entry.get('title') or '(無標題)'} —— {len(others)} 則回覆")
-                print(f"  最後一則 {when(others[-1])}：{(others[-1].get('text') or '')[:60]}")
-                print(f"  {entry.get('permalink') or ''}")
-        print(f"\n—— 掃了 {len(threads)} 條串，{found} 條有人回過", file=sys.stderr)
+            others = [u for u in (p.get("reply_users") or []) if u != me]
+            if not others:
+                continue
+            found += 1
+            last = p.get("latest_reply")
+            stamp = datetime.fromtimestamp(float(last)).strftime("%m/%d %H:%M") if last else "?"
+            print(f"[{rid}] {name_of[rid] or '(無標題)'} —— {p.get('reply_count', 0)} 則，最後 {stamp}")
+            print(f"  {'、'.join('<@%s>' % u for u in others)}")
+            print(f"  {deep_link(list_id, rid)}")
+        print(f"\n—— 表上 {len(name_of)} 列，{found} 列有別人回過", file=sys.stderr)
         return
 
-    entry = threads.get(args.record_id)
-    if not entry or not entry.get("ts"):
-        die(f"{args.record_id} 還沒有討論串。先跑一次 progress 或 ready。")
-
-    msgs = thread_messages(token, channel, entry["ts"])
+    ts = item_thread_ts(token, list_id, args.record_id)
+    msgs = [m for m in thread_messages(token, channel, ts) if not is_parent(m)]
     shown = msgs if args.all else [m for m in msgs if not is_ours(m)]
-    print(f"{entry.get('title') or '(無標題)'}　{entry['permalink']}")
+    print(f"{deep_link(list_id, args.record_id)}")
     if not shown:
         print("（沒有人回過。加 --all 看 bot 自己發的。）")
         return
@@ -523,33 +509,6 @@ def cmd_replies(argv):
         files = [f.get("name") or f.get("title") or f.get("id")
                  for f in (m.get("files") or [])]
         print(m.get("text") or (f"[附件] {'、'.join(files)}" if files else "(沒有純文字內容)"))
-
-
-def cmd_link(argv):
-    """把 issue 編號記進快取；不帶編號就印出這一列已知的東西。"""
-    ap = argparse.ArgumentParser(
-        prog="slack-list link",
-        description="記下某一列對到哪幾張 issue（快取）。不帶編號就印出已知的。",
-        epilog="這是快取不是正本。正本是 issue body 裡那行 Slack 來源；"
-               "忘了記也不會壞，回去 gh issue list --search \"<record_id>\" --state all 就有。")
-    ap.add_argument("record_id", help="表上那一列的 ID（Rec… 開頭）")
-    ap.add_argument("issues", nargs="*", type=int, metavar="編號",
-                    help="issue 編號，可以一次給多個。一列預設一張，拆單才會有多張")
-    args = ap.parse_args(argv)
-
-    if not args.issues:
-        entry = load_threads().get(args.record_id)
-        if not entry:
-            print(f"{args.record_id} 沒有任何記錄（還沒開過討論串）")
-            return
-        print(f"{entry.get('title') or '(無標題)'}")
-        print(f"  討論串 {entry.get('permalink') or '(無)'}")
-        print(f"  issue  {entry.get('issues') or '(還沒記，去 gh issue list --search 查)'}")
-        return
-
-    added = save_issues(args.record_id, args.issues)
-    known = load_threads()[args.record_id]["issues"]
-    print(f"新記 {added or '(都已經記過了)'}；這一列目前 {known}")
 
 
 def cmd_ready(argv):
@@ -567,22 +526,22 @@ def cmd_ready(argv):
                     help="怎麼驗，一個步驟一個 --verify，可重複。至少要一個")
     ap.add_argument("--md", metavar="檔案", help="複雜時附一份說明 md（可選）")
     ap.add_argument("--quiet", action="store_true",
-                    help="不 @ 人、不 broadcast，只留在串裡。批次補狀態時用")
+                    help="不 @ 人，只留在串裡。批次補狀態時用")
     args = ap.parse_args(argv)
 
     token, list_id = config()
-    channel = progress_channel()
+    channel = comment_channel(list_id)
     cols = schema(token, list_id)
     ready_opt = select_value(cols, COL_STATUS, STATUS_READY)
     rec = record(token, list_id, args.record_id)
     title = record_title(rec, cols)
     link = deep_link(list_id, args.record_id)
-    ts, _ = open_thread(token, list_id, channel, args.record_id, rec, cols)
+    ts = item_thread_ts(token, list_id, args.record_id)
 
-    who = record_assignees(rec, cols)
-    mention = " ".join(f"<@{u}>" for u in who)
+    who = record_reporter(rec)
+    mention = f"<@{who}>" if who else ""
     if not who and not args.quiet:
-        print(f"提醒：「{title}」沒有指派對象，這則不會 @ 到任何人。", file=sys.stderr)
+        print(f"提醒：「{title}」查不到建立者，這則不會 @ 到任何人。", file=sys.stderr)
 
     head = (f"{mention} 可以驗收了 → <{link}|{title}>" if mention
             else f"可以驗收了 → <{link}|{title}>")
@@ -600,9 +559,9 @@ def cmd_ready(argv):
     ]
     # 先發訊息、後改狀態。反過來的話訊息發失敗會留下「表上寫 PM確認中 但沒人被通知」，
     # 那正是這支指令要防的事；這個順序最壞只會留下「通知了但狀態沒動」，看得見。
+    # 不 broadcast —— item 留言串沒有 channel 主畫面可以冒，通知全靠上面那個 @。
     api("chat.postMessage", {
         "channel": channel, "thread_ts": ts,
-        "reply_broadcast": not args.quiet,
         "text": f"{title} 可以驗收了", "blocks": blocks,
     }, token)
 
@@ -616,17 +575,11 @@ def cmd_ready(argv):
     api("slackLists.items.update",
         {"list_id": list_id, "id": args.record_id, "cells": cells}, token)
 
-    entry = load_threads()[args.record_id]
     print(f"已通知{'（quiet，沒 @ 人）' if args.quiet else ''}：{title}")
     print(f"狀態 → {STATUS_READY}")
     if args.md:
-        print(f"附件 → 討論串 + 「{COL_FILE}」欄：{args.md}")
-    # 一列預設一張 issue，拆單才會有多張。這裡只把快取裡的印出來讓人看見 ——
-    # 「是不是全關了」要自己 gh issue list --search 查，這支腳本不碰 GitHub。
-    issues = entry.get("issues") or []
-    if len(issues) > 1:
-        print(f"⚠️ 這一列記了 {len(issues)} 張 issue {issues}——確認都關了嗎？")
-    print(entry["permalink"])
+        print(f"附件 → 留言串 + 「{COL_FILE}」欄：{args.md}")
+    print(link)
 
 
 def cmd_env():
@@ -634,14 +587,12 @@ def cmd_env():
     token = os.environ.get("SLACK_BOT_TOKEN", "")
     list_id = os.environ.get("SLACK_LIST_ID", "")
     my_id = os.environ.get("SLACK_MY_USER_ID", "")
-    channel = os.environ.get("SLACK_PROGRESS_CHANNEL", "")
     masked = f"{token[:9]}…{token[-4:]}" if len(token) > 15 else ("(沒設定)" if not token else "(太短，可能貼錯)")
     print(f".env       : {ROOT / '.env'}（{'有' if (ROOT / '.env').exists() else '不存在'}）")
     print(f"TOKEN      : {masked}")
     print(f"LIST_ID    : {list_id or '(沒設定)'}")
     print(f"MY_USER_ID : {my_id or '(沒設定，mine 指令會不能用)'}")
-    print(f"CHANNEL    : {channel or '(沒設定，progress / ready 會不能用)'}")
-    print(f"討論串對應 : {THREADS_FILE}（{len(load_threads())} 條）")
+    print(f"留言串 channel : {comment_channel(list_id) if list_id else '(要先設 LIST_ID)'}")
 
 
 READ_COMMANDS = {
@@ -657,10 +608,9 @@ READ_COMMANDS = {
 
 # 這幾支自己吃參數，各自有 --help
 WRITE_COMMANDS = {
-    "progress": (cmd_progress, "回一句進度到該項目的討論串，不吵人"),
+    "progress": (cmd_progress, "回一句進度到該列的 item 留言串，不吵人"),
     "ready": (cmd_ready, f"通知可以驗收 + 狀態改成「{STATUS_READY}」"),
-    "link": (cmd_link, "記下這一列對到哪幾張 issue（快取），不帶編號就印出已知的"),
-    "replies": (cmd_replies, "讀討論串；不帶 record_id 就掃出「有人回過」的那幾條"),
+    "replies": (cmd_replies, "讀 item 留言串；不帶 record_id 就掃出「有別人回過」的那幾列"),
 }
 
 

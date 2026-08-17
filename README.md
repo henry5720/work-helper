@@ -7,7 +7,8 @@
 bin/slack-list          讀「Bug/需求總表」，並把處理進度回報到 Slack
 skills/slack-todo/      ↑ 的 skill：讓 agent 知道有這個東西、什麼時候用
 skills/daily-worklog/   從 git commit 產工作日誌（產出寫進 work-docs）
-state/threads.json      record_id → 討論串，由 progress / ready 自己維護
+docs/adr/               這支工具的架構決定，改之前先讀
+CONTEXT.md              這條線上會混淆的詞（討論串、回報對象、指紋…）
 ```
 
 ## 裝成 skill
@@ -70,15 +71,15 @@ bin/slack-list sample   # 只印第一列的原始結構
 
 ## 回報進度
 
-Slack List 的項目留言串**沒有任何 API**（試過的都回 `unknown_method`），
-所以進度不寫在項目裡，寫在一個 channel 的討論串裡，再用連結兩邊互指。
-一個項目一條串。
+回報寫進**該列原生的 item 留言串** —— PM 本來就在那裡講話。
+Slack 在建列時就替每一列開好串了，這支工具只查不建（推導方式與取捨見
+[ADR 0001](docs/adr/0001-report-into-the-native-item-comment-thread.md)）。
 
 ```bash
 # 中間進度：只回在串裡，不 @ 人、不改狀態
 bin/slack-list progress Rec0B… "後端改完，佈建零失敗行"
 
-# 可以驗收了：@ 指派對象 + 冒到 channel 主畫面 + 狀態改成「PM確認中」
+# 可以驗收了：@ 回報對象 + 狀態改成「PM確認中」
 bin/slack-list ready Rec0B… \
   --changed "生產單建立時就佔料，完工才落帳" \
   --verify  "建一張生產單，確認投入明細出現" \
@@ -89,40 +90,32 @@ bin/slack-list ready Rec0B… \
 `--changed` 跟至少一個 `--verify` 是必填。訊息本身不交代這兩件事的話，
 PM 收到的就只是一句「可以驗收了」，然後他會回頭問你。
 
-`--quiet` 不 `@` 人也不 broadcast，批次補狀態時用。
+`--quiet` 不 `@` 人，批次補狀態時用。
 
-讀回覆 —— PM 在串裡回了什麼，只有這裡看得到：
+`@` 的是**回報對象**，也就是把這一列寫上表的人（`created_by`）——
+不是「指派對象」，那欄是負責做的人，通常就是你自己。
 
-```bash
-bin/slack-list replies            # 掃所有串，只列「有人回過」的
-bin/slack-list replies Rec0B…     # 看某一條（--all 連 bot 自己發的也印）
-```
-
-開完 issue 順手記一筆，之後查詢不用每次都搜：
+讀回覆 —— PM 回的東西都在這裡：
 
 ```bash
-bin/slack-list link Rec0B… 1801   # 拆單才會有多個編號
-bin/slack-list link Rec0B…        # 不帶編號＝印出已知的
+bin/slack-list replies            # 掃整張表，只列「有別人回過」的
+bin/slack-list replies Rec0B…     # 看某一列（--all 連 bot 自己發的也印）
 ```
-
-這是**快取不是正本**。正本是 issue body 第一行那句可見的 Slack 來源；
-忘了 `link` 也不會壞，回去 `gh issue list --search "Rec0B…" --state all` 就有。
-
-第一次對某一列下 `progress` 或 `ready` 就會開串，之後都回同一條。
-對應存在 `state/threads.json`；**該列的「連結」欄本來是空的**才會順手寫一份
-給人點 —— PM 自己放的連結不會被蓋掉（398 列裡有 15 列本來就有連結）。
 
 `ready` 先發訊息、後改狀態。反過來的話訊息發失敗會留下
 「表上寫 PM確認中 但沒人被通知」，那正是把兩件事綁進同一支指令要防的東西。
 
 沒有任何刪除 Slack 內容的指令，這是刻意的。
 
+**issue 對到哪一列不存在這裡**，正本是 issue body 第一行那句可見的 Slack 來源，
+查法是 `gh issue list --search "Rec0B…" --state all`。工具不留副本 ——
+留了就是養一份會過期的東西。
+
 ### 這條線需要的東西
 
-- `.env` 多一個 `SLACK_PROGRESS_CHANNEL`（channel ID，`C` 開頭）
-- 那個 channel 要把 `@work-helper` 加進去
-- scope：`chat:write`、`files:write`、`lists:write`；
-  channel 是**私人**的話還要 `groups:read` + `groups:history`（公開的用 `channels:*`）
+- 不用設 channel。留言串的 channel 由 list id 推導（`F…` → `C…`），bot 預設就在裡面
+- scope：`chat:write`、`files:write`、`lists:write`，
+  以及讀留言串要的 `groups:read` + `groups:history`
 
 ## 卡住的話
 
@@ -138,7 +131,7 @@ Slack 失敗時 HTTP 還是回 200，錯誤藏在 body 的 `ok:false`。腳本�
 ## 還沒做的
 
 - `fields` 跑出來之前，`todo` 印的欄位名是 Slack 給的原始 key，不一定好看。看過真實資料再調。
-- List item 的**留言串**讀不到 —— `slackLists.*` 沒有任何 comment 相關的 method，item 的回應裡也沒有 `thread_ts` / `channel`。有些項目的真正規格全在留言裡（`敘述` 欄只有「功能...」），那些只能靠人補。`progress` / `ready` 的討論串是繞路，不是把留言串接通了。
+- 有些項目的真正規格全在留言裡（`敘述` 欄只有「功能...」）。`slack-list replies` 讀得到，但**沒有任何東西會提醒你去讀** —— 派工前要自己先看過那一列的留言串，不然拿到的需求會比實際的少一半。
 - 沒有 Events API，只能定時輪詢 —— **bot 不會被主動叫醒**。PM 在討論串裡回了什麼要自己去問（`slack-list replies`），不會有人通知你。
 - 表的 schema 改不動：加欄位、加選項都回 `missing required field: id`（新元素的 id 只有 Slack 發得出來）。要動欄位只能去 UI。
 - `conversations.rename` 比 UI 嚴格 —— 注音符號會被擋，而且回的是誤導的 `name_taken`。改 channel 名走 UI。

@@ -20,9 +20,11 @@ PM（chieh）把 bug 與需求記在 Slack 的一張 List：**Bug/需求總表**
 
 ## 🚫 先講會做壞的三件事
 
-1. **拿 `敘述` 欄當完整規格** —— 很多列的 `敘述` 只有「功能...」這種被截斷的字。
-   真正的規格常在那一列的**留言串**裡，而留言串 API 讀不到。
-   資訊不足就說「這列要看 Slack 留言」，**不要自己補一個看起來合理的需求**。
+1. **拿 `敘述` 欄當完整規格** —— 很多列的 `敘述` 只有「功能...」這種被截斷的字，
+   真正的規格在那一列的**留言串**裡。`slack-list replies Rec0B…` 就讀得到，
+   **派工或開 issue 之前一定要先讀**。實際發生過：PM 早就在留言裡裁決了，
+   而我們照 `敘述` 開單，等於重問一次他已經答過的事。
+   讀完還是不足才說「這列規格不夠」，**不要自己補一個看起來合理的需求**。
 2. **假設一列 = 一張 issue** —— 實際看過的例子裡，一列的留言串包含 3 個獨立問題
    （UX 疑慮 / bug / 需求變更）。顆粒度還沒定案，不要自作主張拆或合。
 3. **改 `狀態` 欄** —— 那是 PM 在維護的。唯一的例外是 `ready` 指令，
@@ -113,10 +115,9 @@ gh issue list --search "Rec0B…" --state all
 
 # 2. 沒命中才開。body 第一行放這個，然後才是簡報
 > Slack 來源：[Rec0B…](https://shuchenai-rdpm.slack.com/lists/T0B54FC26FR/<LIST_ID>?record_id=Rec0B…)
-
-# 3. 開完把編號記進快取
-../../bin/slack-list link Rec0B… <issue 編號>
 ```
+
+**開完不用另外記。** 那行指紋就是正本，`--search` 立刻查得到，工具不留副本。
 
 `Rec0B…` 就是 `todo` / `mine` 每列開頭印的那串。`<LIST_ID>` 從 `.env` 的 `SLACK_LIST_ID` 拿。
 
@@ -129,16 +130,14 @@ gh issue list --search "Rec0B…" --state all
 
 ### 一列預設一張 issue
 
-拆單是**例外**（顆粒度還沒定案，見最下面）。真的拆了才做這兩件：
+拆單是**例外**（顆粒度還沒定案，見最下面）。真的拆了，每一張都各自埋同一個指紋，
+再用 `slack-list progress` 在該列的留言串貼一則「拆成 #1801 #1802 #1803」讓後面的人看得到。
 
-- `slack-list link Rec0B… 1801 1802 1803` 一次記進去
-- 在討論串貼一則「拆成 #1801 #1802 #1803」，讓後面的人看得到
+### 只有正本，沒有快取
 
-### 快取跟正本
-
-`state/threads.json` 的 `issues` 是**快取**，正本是 issue body 那行。
-忘了 `link` 不會壞 —— 回去 `gh issue list --search` 就有，查到再 `link` 補記。
-**快取可以錯，正本不能錯。**
+「這一列對到哪幾張 issue」的唯一答案是 `gh issue list --search "Rec0B…" --state all`。
+工具不存副本 —— 存了就是養一份會過期的東西（見
+`docs/adr/0001-report-into-the-native-item-comment-thread.md`）。
 
 issue 格式走 `~/code/teamsync-frontend` 的
 `docs/guides/workflow/github-issue-standards.md`
@@ -150,18 +149,18 @@ issue 格式走 `~/code/teamsync-frontend` 的
 
 ## 📣 回報
 
-**一列一串**：每個項目在 `SLACK_PROGRESS_CHANNEL` 有且只有一條討論串，
-所有更新都回在裡面。腳本自己維護 `record_id → 討論串` 的對應，你不用管。
+**回報寫進該列原生的 item 留言串** —— PM 本來就在那裡講話。
+Slack 在建列時就替每一列開好串了，腳本只查不建，對應關係也不用維護（Slack 自己是正本）。
 
-這條串存在的原因是 **Slack List 項目的留言串沒有任何 API** ——
-每個候選 method 都回 `unknown_method`。所以進度寫在 channel 的串裡，
-再用連結兩邊互指。它是繞路，不是把留言串接通了。
+⚠️ 舊版說「List 項目的留言串沒有 API」，那是拿 `slackLists.*` 試出來的結論 ——
+問對了問題、用錯了 API。留言歸 `conversations.*` 管，讀寫都通。
+推導方式與代價見 `docs/adr/0001-report-into-the-native-item-comment-thread.md`。
 
 ```bash
 # 中間進度：只回在串裡，不 @ 人、不改狀態
 ./bin/slack-list progress Rec0B… "後端改完，佈建零失敗行"
 
-# 可以驗收了：@ 指派對象 + 冒到 channel 主畫面 + 狀態改成「PM確認中」
+# 可以驗收了：@ 回報對象 + 狀態改成「PM確認中」
 ./bin/slack-list ready Rec0B… \
   --changed "生產單建立時就佔料，完工才落帳" \
   --verify  "建一張生產單，確認投入明細出現在異動紀錄" \
@@ -176,22 +175,25 @@ issue 格式走 `~/code/teamsync-frontend` 的
   不確定就跑 `progress`，那個不吵人。
   **這一列如果拆成多張 issue，要全部關掉才算** —— 跑之前先
   `gh issue list --search "Rec0B…" --state open`，有東西回來就不要跑。
-  （`ready` 自己不查 GitHub，它只會把快取裡記到的編號印出來提醒你。）
+  （`ready` 自己不查 GitHub，這步是你的責任。）
 - **`--verify` 寫得出來才算做完。** 那是 PM 唯一真正需要的東西。
   「測試一下」等於沒寫。要寫成「開哪個頁面 → 做什麼 → 看到什麼」。
 - **`--changed` 用白話。** PM 不看 commit，不要貼 SHA 或函式名。
 
-`--quiet` 不 `@` 人也不 broadcast，只有使用者明講「先別吵他」時才用。
+`--quiet` 不 `@` 人，只有使用者明講「先別吵他」時才用。
+
+⚠️ **`@` 的是「回報對象」（`created_by`，把這列寫上表的人），不是「指派對象」。**
+指派對象是負責做的人，通常就是你自己 —— `@` 他等於沒通知任何人。
 
 沒有任何刪除指令。要撤回已發的訊息，跟使用者說，讓他自己刪。
 
 ### 讀回覆
 
-PM 在討論串裡回了什麼，**只有這裡看得到** —— List 項目的原生留言串沒有 API。
+PM 的回覆都在該列的 item 留言串裡。
 
 ```bash
-./bin/slack-list replies            # 掃所有已知的串，只列「有人回過」的
-./bin/slack-list replies Rec0B…     # 看某一條串（預設只印別人回的）
+./bin/slack-list replies            # 掃整張表，只列「有別人回過」的
+./bin/slack-list replies Rec0B…     # 看某一列（預設只印別人回的）
 ./bin/slack-list replies Rec0B… --all   # 連 bot 自己發的也印
 ```
 
