@@ -88,13 +88,29 @@ herdr agent start "$SLUG" --kind claude --pane "$PANE"
 
 **完成條件**：`herdr agent list` 裡看得到 `$SLUG`。
 
-## 4. 一句話派工
+## 4. 派工：先要計畫，不要先要 code
 
 ```bash
-herdr agent prompt "$SLUG" "讀 .claude/handoff.md，你 own issue #$ISSUE"
+herdr agent prompt "$SLUG" "讀 .claude/handoff.md，你 own issue #$ISSUE。
+先把計畫 gh issue comment 回 issue，然後停 —— 這一輪不要改任何檔案。"
 ```
 
 **短到不像話是對的。** 一長就代表你在替負責人想它該怎麼做，而該講的都在 issue 裡了。
+
+**完成條件**：issue 上有一份計畫，而且它**停了**。不是「開始動工」—— 動工等下一步。
+它也不該回頭問背景（問了就是 issue 寫得不夠，把它問的那句記下來，那是 issue 模板下一版要補的欄位）。
+
+## 5. 使用者批次看計畫，過了才放行
+
+```bash
+herdr agent prompt "$SLUG" "計畫可以，開始做"
+```
+
+**計畫寫進 issue、不是停在 pane 裡等人按** —— 這樣 N 張單的計畫可以一次看完，
+跟看 N 張任務單是同一個動作。互動式核可會讓 N 個 agent 各自隨機打斷使用者，
+那正是這整套要避開的東西。
+
+看的是「**有沒有理解對**」，不是「這是最好的做法嗎」。不對就直接在 comment 裡改方向，再叫它重讀。
 
 ⚠️ **要補東西補在 issue，不要改 `handoff.md`。** handoff 是快照、issue 是權威；改快照會讓兩邊分岔，而三天後回頭看只有 issue。`gh issue comment` 之後叫它重讀：
 
@@ -102,7 +118,7 @@ herdr agent prompt "$SLUG" "讀 .claude/handoff.md，你 own issue #$ISSUE"
 herdr agent prompt "$SLUG" "issue 有更新，回去讀 gh issue view $ISSUE --comments"
 ```
 
-**完成條件**：agent 開始動工，而且**沒有回頭問背景**。它問了背景就是 issue 寫得不夠 —— 把它問的那句記下來，那是 issue 模板下一版要補的欄位。
+**完成條件**：agent 開始動工。
 
 ---
 
