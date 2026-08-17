@@ -7,6 +7,10 @@
 bin/slack-list          讀「Bug/需求總表」，並把處理進度回報到 Slack
 skills/slack-todo/      ↑ 的 skill：讓 agent 知道有這個東西、什麼時候用
 skills/daily-worklog/   從 git commit 產工作日誌（產出寫進 work-docs）
+skills/fleet-recon/     平行查一批待辦的現況、每件開成一張 issue（fleet 第一波）
+skills/fleet-worktree/  一張 issue 開成隔離 worktree + 派長駐 agent（fleet 第二波）
+docs/fleet.md           ↑ 兩支 fleet skill 的設計理由（為什麼這樣分工、每步判斷什麼）
+docs/fleet-dry-run-checklist.md  跑一輪 fleet 的打勾表（消耗品，跑完清空）
 docs/adr/               這支工具的架構決定，改之前先讀
 CONTEXT.md              這條線上會混淆的詞（討論串、回報對象、指紋…）
 ```
