@@ -70,7 +70,14 @@ EOF
 | issue 快照 | agent 讀本地檔省 context |
 | 身分卡 | project-root 的 `CLAUDE.md` / `CLAUDE.local.md` 在 `/compact` 之後會被重新讀入。**沒有它，agent 失憶後會回頭讀那份過期的快照** |
 
-⚠️ **`CLAUDE.local.md` 要在目標 repo 的 `.gitignore` 裡**（`git check-ignore -v CLAUDE.local.md` 要命中）。沒加它會出現在 `git status`，把偵察那輪的守門訊號汙染掉。
+⚠️ **`CLAUDE.local.md` 要先被忽略**，不然它會出現在 `git status`，把偵察那輪的守門訊號汙染掉。
+用 `.git/info/exclude`（共用 git dir，所有 worktree 立刻生效）而不是 `.gitignore`
+（被追蹤的檔案，已開好的 worktree 在別的 branch 上看不到）：
+
+```bash
+echo 'CLAUDE.local.md' >> "$(git rev-parse --git-common-dir)/info/exclude"
+git check-ignore -v CLAUDE.local.md   # 要命中才算好
+```
 
 ⚠️ **不要複製 `.env.local` 過去。** 測試 / lint / typecheck 都不碰 env，而複製出去的秘密檔副本會靜靜過期，散越多份越難清。
 

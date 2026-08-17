@@ -407,7 +407,16 @@ grill 的產出是**你的判斷品質**，那個東西平行不了。三個不�
 
 ### 目標 repo 的兩個前置
 
-- **`.gitignore` 要有 `CLAUDE.local.md`**，否則接單寫的身分卡會汙染偵察的守門訊號。
+- **`CLAUDE.local.md` 要被忽略**，否則接單寫的身分卡會汙染偵察那輪的守門訊號。
+  ⚠️ **用 `.git/info/exclude`，不要用 `.gitignore`。** `.gitignore` 是被追蹤的檔案 ——
+  已經開好的 worktree 在別的 branch 上，看不到你剛加的那行，要等那個 commit 傳到它的 branch。
+  `info/exclude` 住在共用的 git dir，**所有 worktree 立刻生效**（實測過）：
+
+  ```bash
+  echo 'CLAUDE.local.md' >> "$(git rev-parse --git-common-dir)/info/exclude"
+  ```
+
+  代價是它跟著這個 clone、不進版控 —— 但這本來就是機器層的設定，跟 `~/code/CLAUDE.md` 同一類。
 - **`CLAUDE.md` 觸發表要有「決定要開單時 → 讀 issue 規範」**。措辭要涵蓋**規劃階段** —— 寫「開 / 改 issue 時讀」會被讀成「執行 `gh issue create` 那一刻才讀」，於是規劃「要開幾張」時沒讀到。實測踩過。
 
 ### 指紋（Slack 來源）
@@ -423,9 +432,10 @@ grill 的產出是**你的判斷品質**，那個東西平行不了。三個不�
 
 - **`bin/fleet` script 還沒寫。** 第一件該包進去的是接單的 bootstrap，不是 spawn —— spawn 手打很快，環境沒起來才是每次都卡住的地方。
 - **調度層：架構定了，實作還沒。** 形狀是「總管理 pane + 它自己開的偵察」，但還是手動開 session。
-- **三個新機制還沒驗過**：終止條件、`git status` 守門、`CLAUDE.local.md` 身分卡。用 checklist 跑一輪。
+- **四個新機制還沒驗過**：終止條件、`git status` 守門、`CLAUDE.local.md` 身分卡、執行前看計畫。用 checklist 跑一輪 —— 這是現在最該做的一件事。
 - **orchestrator 工具還沒選。** 兩條路都沒試：`~/.claude/agents/*.md` 自訂角色（零依賴，但 `.claude/` 被 gitignore ⇒ 不能共享），或 `oh-my-opencode-slim`（七角色 + 自動開 pane，Herdr 整合需 0.8.0+，支援 Claude Code 不是 opencode 專屬）。**先用一張最機械的 ✅ 單做 A/B**，不要整批換。
-- **`~/code/CLAUDE.md` 還沒建。**
+- ~~**`~/code/CLAUDE.md` 還沒建。**~~ 2026-08-17 建好（49 行：前後端配對、repo 外權威文件、跨 repo 查證鐵則）。
+- ~~**`CLAUDE.local.md` 還沒被忽略。**~~ 2026-08-17 用 `.git/info/exclude` 處理好，四個工作區都驗過生效。
 - **策略層（日記 agent）先不做。** 那層管「你有沒有在做對的事」，等這層跑順再說。
 
 ### 從哪開始

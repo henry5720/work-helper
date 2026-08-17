@@ -45,8 +45,8 @@
 
 這三件是 2026-08-17 修訂加的，**沒做完不要開始**：
 
-- [ ] 目標 repo 的 `.gitignore` 有 `CLAUDE.local.md`
-      （`git check-ignore -v CLAUDE.local.md` 要命中；沒加會汙染步驟 3 的守門訊號）
+- [ ] 目標 repo 忽略了 `CLAUDE.local.md`（`git check-ignore -v CLAUDE.local.md` 要命中）
+      —— 用 `.git/info/exclude` 不是 `.gitignore`，理由見 fleet.md〈要先準備什麼〉
 - [ ] `~/code/CLAUDE.md` 存在，且含：repo 配對關係、repo 外權威文件位置、跨 repo 查證鐵則
 - [ ] 目標 repo 的 `CLAUDE.md` 觸發表有「**決定要開單時**（含規劃要開幾張）→ 讀 issue 規範」
       —— 措辭要涵蓋規劃階段，不能只寫「開 / 改 issue 時」
@@ -160,7 +160,7 @@
 - [ ] 叫 `fleet-worktree`（指令都在裡面）
 - [ ] 裝依賴花了幾秒：____
 - [ ] `herdr agent list` 看得到這個 slug，而且**有 name**
-- [ ] 寫完身分卡後跑一次 `git status --short` —— **應該還是空的**（驗 gitignore 那條有效）
+- [ ] 寫完身分卡後跑一次 `git status --short` —— **應該還是空的**（驗 exclude 那條有效）
 
 **這步算過的條件**：
 
