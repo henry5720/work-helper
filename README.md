@@ -131,7 +131,7 @@ Slack 失敗時 HTTP 還是回 200，錯誤藏在 body 的 `ok:false`。腳本�
 ## 還沒做的
 
 - `fields` 跑出來之前，`todo` 印的欄位名是 Slack 給的原始 key，不一定好看。看過真實資料再調。
-- List item 的**留言串**讀不到 —— `slackLists.*` 沒有任何 comment 相關的 method，item 的回應裡也沒有 `thread_ts` / `channel`。有些項目的真正規格全在留言裡（`敘述` 欄只有「功能...」），那些只能靠人補。`progress` / `ready` 的討論串是繞路，不是把留言串接通了。
+- 有些項目的真正規格全在留言裡（`敘述` 欄只有「功能...」）。`slack-list replies` 讀得到，但**沒有任何東西會提醒你去讀** —— 派工前要自己先看過那一列的留言串，不然拿到的需求會比實際的少一半。
 - 沒有 Events API，只能定時輪詢 —— **bot 不會被主動叫醒**。PM 在討論串裡回了什麼要自己去問（`slack-list replies`），不會有人通知你。
 - 表的 schema 改不動：加欄位、加選項都回 `missing required field: id`（新元素的 id 只有 Slack 發得出來）。要動欄位只能去 UI。
 - `conversations.rename` 比 UI 嚴格 —— 注音符號會被擋，而且回的是誤導的 `name_taken`。改 channel 名走 UI。
