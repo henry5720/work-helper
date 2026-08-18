@@ -632,23 +632,58 @@ def cmd_replies(argv):
         print(m.get("text") or (f"[附件] {'、'.join(files)}" if files else "(沒有純文字內容)"))
 
 
+def check_url(url):
+    """發出去之前先確認測試連結連得到。貼一個連不到的網址給 PM，比沒貼還糟。"""
+    if not re.match(r"^https?://", url):
+        die(f"測試連結要以 http:// 或 https:// 開頭，收到的是：{url}")
+    bad = f"確認部署好了沒（分支預覽要 CI 跑完才會有），或是這一列本來就沒有預覽環境 —— 那就用 --no-url。"
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            code = resp.status
+    except urllib.error.HTTPError as e:
+        code = e.code
+        if code == 405:  # 有些站不收 HEAD，改用 GET 再試一次
+            try:
+                with urllib.request.urlopen(url, timeout=15) as resp:
+                    code = resp.status
+            except Exception as exc:
+                die(f"測試連結連不到（{exc}）：{url}\n{bad}")
+    except Exception as exc:
+        die(f"測試連結連不到（{exc}）：{url}\n{bad}")
+    if code >= 400:
+        die(f"測試連結回 HTTP {code}：{url}\n{bad}")
+
+
 def cmd_ready(argv):
     """可驗收：@ 回報對象，並把狀態改成 PM確認中。"""
     ap = argparse.ArgumentParser(
         prog="slack-list ready",
         description="通知 PM 可以驗收，並把狀態改成「%s」。兩件事一起做，不能只做一半。" % STATUS_READY,
         epilog="例：slack-list ready Rec0B… "
+               "--url https://fix-xxx.teamsync-frontend.pages.dev "
                "--changed '生產單建立時就佔料，完工才落帳' "
                "--verify '建一張生產單，確認投入明細出現' "
                "--verify '帳頁按確認完工，確認成品進來'")
     ap.add_argument("record_id", help="表上那一列的 ID（Rec… 開頭）")
-    ap.add_argument("--changed", required=True, help="改了什麼，一兩句白話")
+    ap.add_argument("--changed", required=True, action="append", metavar="一句話",
+                    help="改了什麼，白話。可重複，一行一句")
     ap.add_argument("--verify", required=True, action="append", metavar="步驟",
                     help="怎麼驗，一個步驟一個 --verify，可重複。至少要一個")
     ap.add_argument("--md", metavar="檔案", help="複雜時附一份說明 md（可選）")
+    # 測試連結沒有預設值，也不自己從 branch 推 —— 這支是在 work-helper 目錄底下跑的，
+    # cwd 早就離開專案 repo，git 問到的會是 work-helper 自己的 branch。
+    # 二選一而且沒有預設，是為了讓「忘記附連結」變成跑不動，而不是發出去才發現。
+    url_g = ap.add_mutually_exclusive_group(required=True)
+    url_g.add_argument("--url", metavar="網址",
+                       help="測試連結（分支預覽環境）。發出去之前會先確認連得到")
+    url_g.add_argument("--no-url", action="store_true",
+                       help="這一列沒有預覽環境可看（後端單、純文件單）")
     ap.add_argument("--quiet", action="store_true",
                     help="不 @ 人，只留在串裡。批次補狀態時用")
     args = ap.parse_args(argv)
+    if args.url:
+        check_url(args.url)  # 連不到就中止，不要留下「通知發了但連結是死的」
 
     token, list_id = config()
     channel = comment_channel(list_id)
@@ -669,7 +704,8 @@ def cmd_ready(argv):
     blocks = [
         {"type": "section", "text": {"type": "mrkdwn", "text": head}},
         {"type": "section",
-         "text": {"type": "mrkdwn", "text": f"*改了什麼*\n{args.changed}"}},
+         "text": {"type": "mrkdwn",
+                  "text": "*改了什麼*\n" + "\n".join(args.changed)}},
         {"type": "rich_text", "elements": [
             {"type": "rich_text_section",
              "elements": [{"type": "text", "text": "怎麼驗", "style": {"bold": True}}]},
@@ -678,6 +714,9 @@ def cmd_ready(argv):
                  "elements": [{"type": "text", "text": v}]} for v in args.verify]},
         ]},
     ]
+    if args.url:
+        blocks.append({"type": "section", "text": {
+            "type": "mrkdwn", "text": f"*測試連結*\n{args.url}"}})
     # 先發訊息、後改狀態。反過來的話訊息發失敗會留下「表上寫 PM確認中 但沒人被通知」，
     # 那正是這支指令要防的事；這個順序最壞只會留下「通知了但狀態沒動」，看得見。
     # 不 broadcast —— item 留言串沒有 channel 主畫面可以冒，通知全靠上面那個 @。

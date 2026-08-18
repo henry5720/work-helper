@@ -150,13 +150,14 @@ Slack 在建列時就替每一列開好串了，腳本只查不建，對應關�
 
 # 可以驗收了：@ 回報對象 + 狀態改成「PM確認中」
 ./bin/slack-list ready Rec0B… \
+  --url     https://fix-spc-update.teamsync-frontend.pages.dev \
   --changed "生產單建立時就佔料，完工才落帳" \
   --verify  "建一張生產單，確認投入明細出現在異動紀錄" \
   --verify  "回帳頁按「確認完工」，確認成品進來" \
   --md 驗收說明.md      # 可選，複雜時才附
 ```
 
-三條規矩：
+五條規矩：
 
 - **`ready` 只在使用者說可以驗收時跑。** 它會推播吵到 PM。
   你自己覺得寫完了不算；測試綠了也不算；**沒 push 的 commit 不算**。
@@ -169,6 +170,14 @@ Slack 在建列時就替每一列開好串了，腳本只查不建，對應關�
 - **`--verify` 寫得出來才算做完。** 那是 PM 唯一真正需要的東西。
   「測試一下」等於沒寫。要寫成「開哪個頁面 → 做什麼 → 看到什麼」。
 - **`--changed` 用白話。** PM 不看 commit，不要貼 SHA 或函式名。
+  可以重複給，一句一個 `--changed`。
+- **`--url` 要帶測試連結，`ready` 才跑得動。** 前端的分支預覽網址是
+  branch 名稱把 `/` 與其他非英數字元換成 `-`，接
+  `.teamsync-frontend.pages.dev` —— `fix/spc-update` →
+  `https://fix-spc-update.teamsync-frontend.pages.dev`。
+  **腳本自己不推導**（它在 `work-helper` 目錄跑，`git` 問到的是 work-helper 的 branch），
+  所以要你算出來傳進去；發出去之前它會先確認連得到，連不到就中止。
+  分支預覽要 CI 跑完才會有；後端單、純文件單這種本來就沒有畫面可看的，用 `--no-url`。
 
 `--quiet` 不 `@` 人，只有使用者明講「先別吵他」時才用。
 

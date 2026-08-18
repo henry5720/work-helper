@@ -95,6 +95,7 @@ bin/slack-list progress Rec0B… "後端改完，佈建零失敗行"
 
 # 可以驗收了：@ 回報對象 + 狀態改成「PM確認中」
 bin/slack-list ready Rec0B… \
+  --url     https://fix-spc-update.teamsync-frontend.pages.dev \
   --changed "生產單建立時就佔料，完工才落帳" \
   --verify  "建一張生產單，確認投入明細出現" \
   --verify  "帳頁按確認完工，確認成品進來" \
@@ -108,8 +109,15 @@ bin/slack-list draft Rec0B… \
   --requested-by U0B…
 ```
 
-`--changed` 跟至少一個 `--verify` 是必填。訊息本身不交代這兩件事的話，
+`--changed` 跟至少一個 `--verify` 是必填，兩者都可以重複給。訊息本身不交代這兩件事的話，
 PM 收到的就只是一句「可以驗收了」，然後他會回頭問你。
+
+`--url`（測試連結）跟 `--no-url` 也是二選一必填，**沒有預設值是刻意的**：驗收步驟寫得再清楚，
+PM 沒有地方可以照著做還是等於沒寫，而「忘記附連結」不會有任何徵兆。二選一讓忘記變成跑不動。
+前端的分支預覽是 branch 名稱把 `/` 與其他非英數字元換成 `-`，接 `.teamsync-frontend.pages.dev`。
+腳本不自己從 git 推導 —— 它在 `work-helper` 目錄底下跑，`git` 問到的會是 work-helper 自己的
+branch。發出去之前它會 HEAD 一下，連不到就中止（分支預覽還沒部署好時 Cloudflare 回 403，
+不是 404，所以判的是 `>= 400`）。
 
 `--quiet` 不 `@` 人，批次補狀態時用。
 

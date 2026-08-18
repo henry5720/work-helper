@@ -168,6 +168,26 @@ class SlackListTest(unittest.TestCase):
         self.assertIn("https://create", payload["text"])
         self.assertIn("不會建立 GitHub issue", payload["text"])
 
+    def test_check_url_rejects_non_http_scheme(self):
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as err:
+            slack_list.check_url("ftp://example.com")
+        self.assertIn("http", err.getvalue())
+
+    @patch.object(slack_list.urllib.request, "urlopen")
+    def test_check_url_rejects_error_status(self, urlopen):
+        # 分支預覽還沒部署好時 Cloudflare 回 403，不是 404 —— 所以判的是 >= 400
+        urlopen.side_effect = slack_list.urllib.error.HTTPError(
+            "https://gone.pages.dev", 403, "Forbidden", {}, None)
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as err:
+            slack_list.check_url("https://gone.pages.dev")
+        self.assertIn("403", err.getvalue())
+        self.assertIn("--no-url", err.getvalue())
+
+    @patch.object(slack_list.urllib.request, "urlopen")
+    def test_check_url_passes_on_200(self, urlopen):
+        urlopen.return_value.__enter__.return_value.status = 200
+        slack_list.check_url("https://fix-spc-update.teamsync-frontend.pages.dev")
+
 
 if __name__ == "__main__":
     unittest.main()
