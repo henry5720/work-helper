@@ -311,6 +311,7 @@ echo 'CLAUDE.local.md' >> "$(git rev-parse --git-common-dir)/info/exclude"
 
 ## 現況與待辦
 
+- **2026-08-18 暫停點：先實測，不先選 orchestrator。** 「總管理」的角色與管轄範圍已定，orchestrator 只是承載這個角色的工具。恢復工作時，先完成 dry-run checklist 的三個硬前置，再用手動 Herdr／原生 subagent 跑一件範圍小、會動到畫面、走 issue 路徑的 `✅` 待辦；拿到流程實測結果後，才用同類任務 A/B orchestrator，避免把流程問題和工具問題混在一起。
 - **`bin/fleet` script 還沒寫。** 第一件該包進去的是接單的 bootstrap，不是 spawn —— spawn 手打很快，環境沒起來才是每次都卡住的地方。之後是總管理那些機械動作：讀草稿、查重、`gh issue create --body-file` ＋ 貼 label、算改動範圍交集。
 - **總管理還是手動開 session。** 架構定了，實作還沒。
 - **七個機制還沒驗過**：終止條件、`git status` 守門、`CLAUDE.local.md` 身分卡、執行前看計畫、⚠️ 拆成範圍／做法兩種、偵察改寫草稿、當天做完不開 issue。用 checklist 跑一輪 —— 這是現在最該做的一件事。
