@@ -39,16 +39,27 @@ cd ~/code/work-helper
 ./bin/slack-list todo      # 一行一列，人看的
 ./bin/slack-list mine      # 只印指派給使用者自己的列
 ./bin/slack-list mine 庫存  # 再加關鍵字過濾（比對整列文字，不分欄位）
+./bin/slack-list assigned U0B… 庫存  # 指派給指定 Slack 使用者，可再加關鍵字
 ./bin/slack-list json      # 壓平後的 JSON，要程式處理時用
 ./bin/slack-list fields    # 不確定欄位叫什麼的時候先跑這個
 ```
 
-問「我身上有什麼事」「跟 X 有關的」用 `mine`，不要自己撈 `json` 再土炮過濾。
+從 terminal/local agent問「我身上有什麼事」「跟 X 有關的」用 `mine`。
+從 OpenAB 回應 Slack 訊息時，「我」是 `openab.sender.v1.sender_id`，用
+`assigned <sender_id> [關鍵字]`。不要用共享環境的 `SLACK_MY_USER_ID`，也不要自己撈
+`json` 再土炮過濾。
 
 每一列開頭的 `[Rec0B…]` 就是 record ID，回報時要用。
 
 跑不動時先 `./bin/slack-list env`（確認 `.env` 讀到了）再 `count`（確認通得到）。
 `.env` 沒設定會直接報哪個變數缺，照 `work-helper/README.md` 設定。
+
+OpenAB 每則訊息會附 `openab.sender.v1` JSON。人在 item 留言串直接 `@bot` 時，用裡面的
+`channel_id` 和 `thread_id` 反查待辦列，不要叫人再貼 record ID：
+
+```bash
+./bin/slack-list context --channel <channel_id> --thread-ts <thread_id>
+```
 
 ---
 
@@ -65,6 +76,24 @@ cd ~/code/work-helper
 
 ## 🔑 開 issue 一定要先埋指紋
 
+先跑 `./bin/slack-list env` 看 `ISSUE_MODE`：
+
+- `agent`：照本節既有流程，用 `gh` 查重並開 issue。
+- `manual`：**沒有 GitHub credential，不准嘗試 `gh` 或要求 token。** 偵察寫完草稿後，用
+  `slack-list draft` 把 Markdown、指紋搜尋頁與 New issue 頁交回原生 item 留言串，然後停。
+  只有既有待辦列能走這條發布流程；DM 或一般 channel 的口述需求要先對應到待辦列。
+
+```bash
+./bin/slack-list draft Rec0B… \
+  --md drafts/<日期>/<短名>.md \
+  --repo ShuChenAI/<repo> \
+  --summary "<一句定位結論>" \
+  --requested-by <openab.sender.v1 的 sender_id>
+```
+
+`manual` mode 的核准動作是人從 GitHub 網頁提交，或把附件交給有 `gh` 權限的 local agent。
+不要聲稱已完成 GitHub 查重；只能提供搜尋連結讓核准者確認。
+
 **開 issue 前必做，不是加分項。** 待辦從 Slack 進 GitHub 的流程裡，開 issue 的是 agent
 不是人，沒有人在那個位置擋重複，所以這步漏掉就一定會開出重複的任務。
 
@@ -78,7 +107,7 @@ gh issue list --search "Rec0B…" --state all
 
 **開完不用另外記。** 那行指紋就是正本，`--search` 立刻查得到，工具不留副本。
 
-`Rec0B…` 就是 `todo` / `mine` 每列開頭印的那串。`<LIST_ID>` 從 `.env` 的 `SLACK_LIST_ID` 拿。
+`Rec0B…` 就是 `todo` / `mine` / `assigned` 每列開頭印的那串。`<LIST_ID>` 從 `.env` 的 `SLACK_LIST_ID` 拿。
 
 ⚠️ **指紋要「看得見」，不要藏在 `<!-- -->` 裡。** GitHub 搜尋會不會索引 HTML 註解沒有定論，
 而整套去重就靠這個查詢，賭不起。放成可見的引言行還有兩個好處：你點得回 Slack 那列，
@@ -135,6 +164,8 @@ Slack 在建列時就替每一列開好串了，腳本只查不建，對應關�
   **這一列如果拆成多張 issue，要全部關掉才算** —— 跑之前先
   `gh issue list --search "Rec0B…" --state open`，有東西回來就不要跑。
   （`ready` 自己不查 GitHub，這步是你的責任。）
+- **`ISSUE_MODE=manual` 時不跑 `ready`。** 遠端 backlog agent 看不到 private GitHub issue，
+  無法證明這一列拆出的任務全關了；驗收由有 GitHub 權限的 local implementation agent 回報。
 - **`--verify` 寫得出來才算做完。** 那是 PM 唯一真正需要的東西。
   「測試一下」等於沒寫。要寫成「開哪個頁面 → 做什麼 → 看到什麼」。
 - **`--changed` 用白話。** PM 不看 commit，不要貼 SHA 或函式名。
@@ -175,7 +206,8 @@ PM 的回覆都在該列的 item 留言串裡。
 三個要注意的：
 
 - **assignee 只有 ID，沒有名字。** 解成名字要 `users:read`，app 沒有那個 scope。
-  自己的 ID 從 `.env` 的 `SLACK_MY_USER_ID` 拿（`mine` 已經處理好），別人的就只能是 ID。
+  Local自己的 ID 從 `.env` 的 `SLACK_MY_USER_ID` 拿（`mine` 已經處理好）；OpenAB當次使用者
+  從 `openab.sender.v1.sender_id` 拿，交給 `assigned`。
 - **名稱前綴（`T` / `V` / `S` / `D` / `B` + 數字）是某種模組代號，但對應關係還沒確認。**
   不要憑字面猜它對到哪個模組，要用就先問使用者。
 - **`狀態` 是多選，而且前端後端分開** —— 一件事可能同時牽涉

@@ -18,6 +18,7 @@ Slack 在建列時就替每一列開好了串，這支工具只查不建（推�
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -260,6 +261,14 @@ def deep_link(list_id, record_id):
     return f"https://shuchenai-rdpm.slack.com/lists/{team}/{list_id}?record_id={record_id}"
 
 
+def issue_mode():
+    load_env()
+    mode = os.environ.get("WORK_HELPER_ISSUE_MODE", "agent").strip().lower()
+    if mode not in ("agent", "manual"):
+        die("WORK_HELPER_ISSUE_MODE 只能是 agent 或 manual")
+    return mode
+
+
 # --- 回報用：找到那一列的留言串 ---
 
 def item_threads(token, list_id):
@@ -294,6 +303,17 @@ def item_thread_ts(token, list_id, record_id):
         die(f"在 {comment_channel(list_id)} 找不到 {record_id} 的留言串。\n"
             "  → 每一列都該有，找不到通常是 record_id 打錯了。")
     return parent["ts"]
+
+
+def record_id_for_thread(token, list_id, channel, thread_ts):
+    """OpenAB 給 channel/thread，反查它是哪一個待辦列。"""
+    expected = comment_channel(list_id)
+    if channel != expected:
+        die(f"{channel} 不是這張 List 的 item 留言 channel（應為 {expected}）")
+    for record_id, parent in item_threads(token, list_id).items():
+        if parent.get("ts") == thread_ts:
+            return record_id
+    die(f"在 {channel} 找不到 thread_ts={thread_ts} 對應的待辦列")
 
 
 def titles(items):
@@ -393,20 +413,37 @@ def cmd_json():
     print(json.dumps([flatten(i) for i in fetch_all()], ensure_ascii=False, indent=2))
 
 
-def cmd_mine():
-    """只印指派給自己的列。多帶一個字串就再用它過濾（比對整列，不分欄位）。"""
-    uid = my_user_id()
-    kw = sys.argv[2] if len(sys.argv) > 2 else ""
+def print_assigned(uid, kw=""):
+    """印出指派給指定 Slack 使用者的列，可再比對整列關鍵字。"""
+    if not re.fullmatch(r"U[A-Z0-9]+", uid):
+        die("Slack user ID 要是 U 開頭，例如 U0B54FKJ93R")
     rows = [flatten(i) for i in fetch_all()]
-    mine = [r for r in rows if uid in (r.get("todo_assignee") or "").split()]
+    assigned = [r for r in rows if uid in (r.get("todo_assignee") or "").split()]
     if kw:
-        mine = [r for r in mine if kw in json.dumps(r, ensure_ascii=False)]
-    for row in mine:
+        assigned = [r for r in assigned if kw in json.dumps(r, ensure_ascii=False)]
+    for row in assigned:
         rid = row.pop("_id", "")
         cells = " ｜ ".join(f"{k}: {v}" for k, v in row.items())
         print(f"[{rid}] {cells}")
     scope = f"指派給 {uid}" + (f" 且含「{kw}」" if kw else "")
-    print(f"\n—— {scope}：{len(mine)} 列（全表 {len(rows)} 列）", file=sys.stderr)
+    print(f"\n—— {scope}：{len(assigned)} 列（全表 {len(rows)} 列）", file=sys.stderr)
+
+
+def cmd_mine():
+    """Local 用：只印指派給 SLACK_MY_USER_ID 的列。"""
+    kw = sys.argv[2] if len(sys.argv) > 2 else ""
+    print_assigned(my_user_id(), kw)
+
+
+def cmd_assigned(argv):
+    """共享 agent 用：只印指派給當次 Slack sender 的列。"""
+    ap = argparse.ArgumentParser(
+        prog="slack-list assigned",
+        description="只印指派給指定 Slack 使用者的待辦列，可再用關鍵字過濾整列。")
+    ap.add_argument("user_id", help="Slack sender ID（U… 開頭）")
+    ap.add_argument("keyword", nargs="?", default="", help="可選，過濾整列文字")
+    args = ap.parse_args(argv)
+    print_assigned(args.user_id, args.keyword)
 
 
 def cmd_progress(argv):
@@ -414,7 +451,7 @@ def cmd_progress(argv):
     ap = argparse.ArgumentParser(
         prog="slack-list progress",
         description="把一句進度回在該列的 item 留言串裡。不會 @ 任何人，也不改狀態。")
-    ap.add_argument("record_id", help="表上那一列的 ID（Rec… 開頭，`mine` 印在最前面）")
+    ap.add_argument("record_id", help="表上那一列的 ID（Rec… 開頭，`mine` / `assigned` 印在最前面）")
     ap.add_argument("note", help="一句話說現在做到哪")
     args = ap.parse_args(argv)
 
@@ -428,6 +465,90 @@ def cmd_progress(argv):
 
     print(f"已回報：{record_title(rec, cols)}")
     print(deep_link(list_id, args.record_id))
+
+
+def compact_message(msg):
+    files = [f.get("name") or f.get("title") or f.get("id")
+             for f in (msg.get("files") or [])]
+    return {
+        "ts": msg.get("ts", ""),
+        "user": msg.get("user", ""),
+        "bot_id": msg.get("bot_id", ""),
+        "text": msg.get("text", ""),
+        "files": files,
+    }
+
+
+def cmd_context(argv):
+    """用 OpenAB sender context 的 channel/thread 取得完整待辦列 context。"""
+    ap = argparse.ArgumentParser(
+        prog="slack-list context",
+        description="用 Slack channel ID 與 thread_ts 反查待辦列，輸出該列和留言串 JSON。")
+    ap.add_argument("--channel", required=True, help="OpenAB sender context 的 channel_id")
+    ap.add_argument("--thread-ts", required=True, help="OpenAB sender context 的 thread_id")
+    args = ap.parse_args(argv)
+
+    token, list_id = config()
+    record_id = record_id_for_thread(token, list_id, args.channel, args.thread_ts)
+    item = next((i for i in fetch_all() if i.get("id") == record_id), None)
+    if not item:
+        die(f"留言串對應 {record_id}，但待辦列已不存在")
+    messages = [compact_message(m) for m in thread_messages(
+        token, args.channel, args.thread_ts) if not is_parent(m)]
+    print(json.dumps({
+        "record_id": record_id,
+        "link": deep_link(list_id, record_id),
+        "channel_id": args.channel,
+        "thread_ts": args.thread_ts,
+        "record": flatten(item),
+        "messages": messages,
+    }, ensure_ascii=False, indent=2))
+
+
+def github_issue_urls(repo, record_id, title):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        die("--repo 要是 owner/repo，例如 ShuChenAI/teamsync-frontend")
+    base = f"https://github.com/{repo}/issues"
+    search = base + "?" + urllib.parse.urlencode({"q": f'is:issue "{record_id}"'})
+    create = base + "/new?" + urllib.parse.urlencode({"title": title})
+    return search, create
+
+
+def cmd_draft(argv):
+    """把 issue 草稿交到 item 留言串；不 @ 人、不改狀態。"""
+    ap = argparse.ArgumentParser(
+        prog="slack-list draft",
+        description="上傳 issue 草稿到 item 留言串，附查重與建立 issue 連結；不改狀態。")
+    ap.add_argument("record_id", help="表上那一列的 ID（Rec… 開頭）")
+    ap.add_argument("--md", required=True, metavar="檔案", help="完整 issue body 草稿")
+    ap.add_argument("--repo", required=True, help="建議發布到的 GitHub owner/repo")
+    ap.add_argument("--summary", required=True, help="給核准者看的短摘要")
+    ap.add_argument("--requested-by", metavar="SLACK_USER_ID",
+                    help="OpenAB sender context 的 sender_id（U…）")
+    args = ap.parse_args(argv)
+
+    token, list_id = config()
+    channel = comment_channel(list_id)
+    cols = schema(token, list_id)
+    rec = record(token, list_id, args.record_id)
+    title = record_title(rec, cols)
+    ts = item_thread_ts(token, list_id, args.record_id)
+    search_url, create_url = github_issue_urls(args.repo, args.record_id, title)
+
+    upload_md(token, channel, ts, args.md)
+    requester = f"\n發起者：<@{args.requested_by}>" if args.requested_by else ""
+    text = (
+        f"*Issue 草稿待核准* — {title}{requester}\n"
+        f"{args.summary}\n"
+        f"建議 repo：`{args.repo}`\n"
+        f"<{search_url}|先用指紋查重> · <{create_url}|確認後到 GitHub 建立 issue>\n"
+        "完整 body 在同一串的 Markdown 附件。這一步不會建立 GitHub issue。"
+    )
+    api("chat.postMessage", {"channel": channel, "thread_ts": ts, "text": text}, token)
+    print(f"草稿已交付：{title}")
+    print(deep_link(list_id, args.record_id))
+    print(search_url)
+    print(create_url)
 
 
 def thread_messages(token, channel, ts):
@@ -512,7 +633,7 @@ def cmd_replies(argv):
 
 
 def cmd_ready(argv):
-    """可驗收：@ 指派對象 + broadcast 到 channel，並把狀態改成 PM確認中。"""
+    """可驗收：@ 回報對象，並把狀態改成 PM確認中。"""
     ap = argparse.ArgumentParser(
         prog="slack-list ready",
         description="通知 PM 可以驗收，並把狀態改成「%s」。兩件事一起做，不能只做一半。" % STATUS_READY,
@@ -592,6 +713,7 @@ def cmd_env():
     print(f"TOKEN      : {masked}")
     print(f"LIST_ID    : {list_id or '(沒設定)'}")
     print(f"MY_USER_ID : {my_id or '(沒設定，mine 指令會不能用)'}")
+    print(f"ISSUE_MODE : {issue_mode()}")
     print(f"留言串 channel : {comment_channel(list_id) if list_id else '(要先設 LIST_ID)'}")
 
 
@@ -607,10 +729,16 @@ READ_COMMANDS = {
 }
 
 # 這幾支自己吃參數，各自有 --help
+ARG_READ_COMMANDS = {
+    "assigned": (cmd_assigned, "只印指派給指定 Slack user ID 的列，可再加關鍵字"),
+    "replies": (cmd_replies, "讀 item 留言串；不帶 record_id 就掃出「有別人回過」的那幾列"),
+    "context": (cmd_context, "用 OpenAB channel/thread 反查待辦列與完整留言"),
+}
+
 WRITE_COMMANDS = {
     "progress": (cmd_progress, "回一句進度到該列的 item 留言串，不吵人"),
+    "draft": (cmd_draft, "交付 issue 草稿附件與人工發布連結，不改狀態"),
     "ready": (cmd_ready, f"通知可以驗收 + 狀態改成「{STATUS_READY}」"),
-    "replies": (cmd_replies, "讀 item 留言串；不帶 record_id 就掃出「有別人回過」的那幾列"),
 }
 
 
@@ -618,6 +746,8 @@ def usage():
     print("用法：slack-list <指令> [參數]\n")
     print("讀取：")
     for k, (_, desc) in READ_COMMANDS.items():
+        print(f"  {k:<9} {desc}")
+    for k, (_, desc) in ARG_READ_COMMANDS.items():
         print(f"  {k:<9} {desc}")
     print("\n回報到 Slack（詳細參數看 `slack-list <指令> --help`）：")
     for k, (_, desc) in WRITE_COMMANDS.items():
@@ -629,6 +759,9 @@ def main():
     if name in ("-h", "--help", "help"):
         usage()
         sys.exit(0)
+    if name in ARG_READ_COMMANDS:
+        ARG_READ_COMMANDS[name][0](sys.argv[2:])
+        return
     if name in WRITE_COMMANDS:
         WRITE_COMMANDS[name][0](sys.argv[2:])
         return

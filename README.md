@@ -47,6 +47,7 @@ opencode 官方文件列的搜尋路徑包含 `~/.agents/skills/*/SKILL.md`、
 ```bash
 cp .env.example .env
 # 填 SLACK_BOT_TOKEN、SLACK_LIST_ID、SLACK_MY_USER_ID
+# 沒有 GitHub credential 的 backlog agent 再設 WORK_HELPER_ISSUE_MODE=manual
 ```
 
 `.env` 在 `.gitignore` 裡，不會被 commit。
@@ -67,12 +68,20 @@ bin/slack-list fields   # 這張表有哪些欄位、各是什麼型別
 bin/slack-list todo     # 一行一列，人看的
 bin/slack-list mine     # 只印指派給我的列
 bin/slack-list mine 庫存 # 指派給我、而且整列文字含「庫存」的
+bin/slack-list assigned U0B… 庫存 # 共享 agent：指派給當次 Slack sender 的列
 bin/slack-list json     # 壓平後的 JSON，給程式吃
 bin/slack-list raw      # Slack 原始回應，不加工
 bin/slack-list sample   # 只印第一列的原始結構
+
+# OpenAB sender context → 待辦列 + 完整留言 JSON
+bin/slack-list context --channel C0B9… --thread-ts 1234567890.123456
 ```
 
 `todo` 是預設，`bin/slack-list` 不帶參數就是它。
+
+`mine` 給沒有 Slack message context 的 local agent使用，以 `.env` 的
+`SLACK_MY_USER_ID` 解釋「我」。OpenAB收到 Slack訊息時已知道當次 `sender_id`，要用
+`assigned <sender_id>`；不要把共享環境裡的固定 ID當成目前說話的人。
 
 ## 回報進度
 
@@ -90,6 +99,13 @@ bin/slack-list ready Rec0B… \
   --verify  "建一張生產單，確認投入明細出現" \
   --verify  "帳頁按確認完工，確認成品進來" \
   --md 驗收說明.md      # 可選，複雜時才附
+
+# 沒有 GitHub credential 時，把完整 issue 草稿交回原生 item 留言串
+bin/slack-list draft Rec0B… \
+  --md drafts/2026-08-18/inventory.md \
+  --repo ShuChenAI/teamsync-frontend \
+  --summary "已定位成前端庫存表欄位映射問題" \
+  --requested-by U0B…
 ```
 
 `--changed` 跟至少一個 `--verify` 是必填。訊息本身不交代這兩件事的話，
@@ -109,6 +125,10 @@ bin/slack-list replies Rec0B…     # 看某一列（--all 連 bot 自己發的�
 
 `ready` 先發訊息、後改狀態。反過來的話訊息發失敗會留下
 「表上寫 PM確認中 但沒人被通知」，那正是把兩件事綁進同一支指令要防的東西。
+
+`WORK_HELPER_ISSUE_MODE=manual` 的 agent 不持有 GitHub credential。它用 `draft` 上傳完整
+Markdown，並附指紋搜尋頁和 New issue 頁；核准者從網頁提交，或把附件交給有 `gh` 權限的
+local agent。這種 agent 也不能證明所有 GitHub issue 已關閉，所以不執行 `ready`。
 
 沒有任何刪除 Slack 內容的指令，這是刻意的。
 
