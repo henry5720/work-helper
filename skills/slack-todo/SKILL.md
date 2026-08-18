@@ -1,6 +1,6 @@
 ---
 name: slack-todo
-description: 讀 PM 記在 Slack「Bug/需求總表」上的待辦，並把處理進度回報回去。當使用者問「PM 有什麼待辦」「Bug/需求總表」時使用；做完一張要通知 PM 驗收時也用。
+description: 讀 PM 記在 Slack「Bug/需求總表」上的待辦，並在該列的留言串回報進度。當使用者問「PM 有什麼待辦」「Bug/需求總表」「PM 有沒有回我」時使用；要在 Slack list 某一列加回覆／留言／回報進度／通知 PM 驗收時也用。
 ---
 
 # PM 的待辦表
