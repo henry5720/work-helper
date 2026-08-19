@@ -7,7 +7,7 @@
 bin/slack-list          讀寫「Bug/需求總表」，並把處理進度回報到 Slack
 bin/sync-skills         把 .claude/skills/ 全部拉線到別的 repo 也叫得到的位置（新增 skill 後跑一次）
 .claude/skills/slack-list/      ↑ 的 skill：讓 agent 知道有這個東西、什麼時候用
-.claude/skills/daily-worklog/   從 git commit 產工作日誌（產出寫進 work-docs）
+.claude/skills/daily-worklog/   從 git commit 產工作日誌（只輸出文字，不落檔）
 .claude/skills/fleet-recon/     平行查一批待辦的現況、每件寫成一份草稿（fleet 第一波）
 .claude/skills/fleet-worktree/  一份草稿或一個 issue 開成隔離 worktree + 派長駐 agent（fleet 第二波）
 .claude/skills/grilling/        釐清需求的訪談（第三方，見 skills-lock.json）

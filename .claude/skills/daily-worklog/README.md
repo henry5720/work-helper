@@ -26,6 +26,6 @@ Codex / Cursor / ChatGPT 沒有 skill 機制，直接把 `SKILL.md` 全文貼進
 
 ## 產出放哪
 
-`~/code/work-docs/docs/logs/worklog/`
-
-skill 在這個 repo，**產出寫進 `work-docs`** —— 日誌是給人讀的文件，歸文件 repo。
+哪裡都不放。日誌直接輸出在對話裡讓你複製貼進公司表單，使用者明講要存檔才落檔，
+理由（兩個 repo 都是 public）見 [`SKILL.md`](./SKILL.md) 的「產出放哪」。
+唯一固定會寫的檔案是跨日沿用的預定進度清單 `~/.claude/worklog-backlog.md`。
