@@ -6,7 +6,7 @@
 ```
 bin/slack-list          讀寫「Bug/需求總表」，並把處理進度回報到 Slack
 bin/sync-skills         把 .claude/skills/ 全部拉線到別的 repo 也叫得到的位置（新增 skill 後跑一次）
-.claude/skills/slack-todo/      ↑ 的 skill：讓 agent 知道有這個東西、什麼時候用
+.claude/skills/slack-list/      ↑ 的 skill：讓 agent 知道有這個東西、什麼時候用
 .claude/skills/daily-worklog/   從 git commit 產工作日誌（產出寫進 work-docs）
 .claude/skills/fleet-recon/     平行查一批待辦的現況、每件寫成一份草稿（fleet 第一波）
 .claude/skills/fleet-worktree/  一份草稿或一個 issue 開成隔離 worktree + 派長駐 agent（fleet 第二波）
@@ -159,7 +159,7 @@ bin/slack-list draft Rec0B… \
 ```
 
 `--report` 是一份 md，整份當訊息本體發出去，模板固定四段 —— 改了什麼／⚠️ 要先知道的（有才寫）
-／怎麼驗收／QA case。範本是 `.claude/skills/slack-todo/report-template.md`，缺段就不准發。
+／怎麼驗收／QA case。範本是 `.claude/skills/slack-list/report-template.md`，缺段就不准發。
 表格靠 Slack 的 `markdown` block 送，Slack 會在伺服器端把它拆成原生 blocks（`## 標題` 變
 `header`、pipe table 變 `table`），所以 QA case 在 Slack 裡是一張真的表格，不是一堆 `|`。
 上限是一則訊息 12,000 字，破了才改用 `--md` 當附件。

@@ -1,5 +1,5 @@
 ---
-name: slack-todo
+name: slack-list
 description: 讀寫 Slack「Bug/需求總表」上的待辦，並在該列的留言串回報進度。當使用者問「PM 有什麼待辦」「新增待辦」「Bug/需求總表」「PM 有沒有回我」時使用；要建立或指派 Slack list 待辦、設定回報對象、加回覆／留言／回報進度／通知 PM 驗收時也用。
 ---
 
@@ -36,23 +36,31 @@ PM（chieh）與授權使用者把 bug 與需求記在 Slack 的一張 List：**
 
 ```bash
 cd ~/code/work-helper
-./bin/slack-list todo      # 一行一列，人看的
-./bin/slack-list mine      # 只印指派給使用者自己的列
-./bin/slack-list mine 庫存  # 再加關鍵字過濾（比對整列文字，不分欄位）
-./bin/slack-list assigned U0B… 庫存  # 指派給指定 Slack 使用者，可再加關鍵字
-./bin/slack-list json      # 壓平後的 JSON，要程式處理時用
-./bin/slack-list fields    # 不確定欄位叫什麼的時候先跑這個
-./bin/slack-list mine --all  # 連已完成的也要（`todo`／`json`／`assigned` 也吃 --all）
+./bin/slack-list rows                      # 一行一列，只印未完成
+./bin/slack-list rows 庫存                  # 關鍵字比對整列文字，不分欄位
+./bin/slack-list rows --assignee U0B…       # 指派給某人
+./bin/slack-list rows --created-by U0B…     # 某人建立的列
+./bin/slack-list rows --status PM確認        # 狀態欄子字串比對
+./bin/slack-list rows --assignee U0B… --status 前端完成   # 條件可疊加
+./bin/slack-list rows --all                # 連已完成的也印
+./bin/slack-list mine                      # local 專用：等同 --assignee 自己
+./bin/slack-list json                      # 壓平後的 JSON，要程式處理時用
+./bin/slack-list fields                    # 不確定欄位叫什麼的時候先跑這個
 ```
 
-⚠️ **`todo`／`mine`／`assigned`／`json` 預設只印未完成的列。** 全表 409 列裡 234 列已完成，
-全印是 20 萬字，那 20 萬字會整包進你的 context。**所以找不到一件事的時候，加 `--all` 再找一次
-才算找過**，不要直接回「表上沒有這件事」—— 它很可能只是已完成。每次印完 stderr 都會告訴你
-這是哪一種視角。
+`todo`／`assigned` 是 `rows` 的舊別名，還能用，但新的查詢一律用 `rows` —— 條件加在 flag 上，
+不用再記哪個子指令支援哪個條件。
+
+⚠️ **預設只印未完成的列。** 全表 409 列裡 234 列已完成；未完成是 3 萬字，全表是 9 萬字，
+而那些字會整包進你的 context。**所以找不到一件事的時候，加 `--all` 再找一次才算找過**，
+不要直接回「表上沒有這件事」—— 它很可能只是已完成。每次印完 stderr 都會告訴你這是哪一種視角。
+
+`--status` 沒比對到任何列時，stderr 會列出這個範圍裡實際出現過的狀態值。空結果配上那份清單，
+才分得出是「真的沒有」還是「你把狀態值打錯了」。狀態值是 PM 在表上自由維護的，不要寫死。
 
 從 terminal/local agent問「我身上有什麼事」「跟 X 有關的」用 `mine`。
 從 OpenAB 回應 Slack 訊息時，「我」是 `openab.sender.v1.sender_id`，用
-`assigned <sender_id> [關鍵字]`。不要用共享環境的 `SLACK_MY_USER_ID`，也不要自己撈
+`rows --assignee <sender_id> [關鍵字]`。不要用共享環境的 `SLACK_MY_USER_ID`，也不要自己撈
 `json` 再土炮過濾。
 
 每一列開頭的 `[Rec0B…]` 就是 record ID，回報時要用。
