@@ -42,7 +42,13 @@ cd ~/code/work-helper
 ./bin/slack-list assigned U0B… 庫存  # 指派給指定 Slack 使用者，可再加關鍵字
 ./bin/slack-list json      # 壓平後的 JSON，要程式處理時用
 ./bin/slack-list fields    # 不確定欄位叫什麼的時候先跑這個
+./bin/slack-list mine --all  # 連已完成的也要（`todo`／`json`／`assigned` 也吃 --all）
 ```
+
+⚠️ **`todo`／`mine`／`assigned`／`json` 預設只印未完成的列。** 全表 409 列裡 234 列已完成，
+全印是 20 萬字，那 20 萬字會整包進你的 context。**所以找不到一件事的時候，加 `--all` 再找一次
+才算找過**，不要直接回「表上沒有這件事」—— 它很可能只是已完成。每次印完 stderr 都會告訴你
+這是哪一種視角。
 
 從 terminal/local agent問「我身上有什麼事」「跟 X 有關的」用 `mine`。
 從 OpenAB 回應 Slack 訊息時，「我」是 `openab.sender.v1.sender_id`，用
@@ -193,24 +199,22 @@ issue 格式走 `~/code/teamsync-frontend` 的
 Slack 在建列時就替每一列開好串了，腳本只查既有串、不另建串，對應關係也不用維護
 （Slack 自己是正本）。
 
-⚠️ 舊版說「List 項目的留言串沒有 API」，那是拿 `slackLists.*` 試出來的結論 ——
-問對了問題、用錯了 API。留言歸 `conversations.*` 管，讀寫都通。
-推導方式與代價見 `docs/adr/0001-report-into-the-native-item-comment-thread.md`。
-
 ```bash
 # 中間進度：只回在串裡，不 @ 人、不改狀態
 ./bin/slack-list progress Rec0B… "後端改完，佈建零失敗行"
 
 # 可以驗收了：@ 回報對象 + 狀態改成「PM確認中」
 ./bin/slack-list ready Rec0B… \
-  --url     https://fix-spc-update.teamsync-frontend.pages.dev \
+  --url    https://fix-spc-update.teamsync-frontend.pages.dev \
+  --report drafts/<日期>/reports/report-<issue>-<短名>.md
+
+# 沒有畫面可看的單（後端、純文件）：沒有 QA table 可寫，用 flag
+./bin/slack-list ready Rec0B… --no-url \
   --changed "生產單建立時就佔料，完工才落帳" \
-  --verify  "建一張生產單，確認投入明細出現在異動紀錄" \
-  --verify  "回帳頁按「確認完工」，確認成品進來" \
-  --md 驗收說明.md      # 可選，複雜時才附
+  --verify  "建一張生產單，確認投入明細出現在異動紀錄"
 ```
 
-五條規矩：
+四條規矩：
 
 - **`ready` 只在使用者說可以驗收時跑。** 它會推播吵到 PM。
   你自己覺得寫完了不算；測試綠了也不算；**沒 push 的 commit 不算**。
@@ -220,10 +224,10 @@ Slack 在建列時就替每一列開好串了，腳本只查既有串、不另�
   （`ready` 自己不查 GitHub，這步是你的責任。）
 - **`ISSUE_MODE=manual` 時不跑 `ready`。** 遠端 backlog agent 看不到 private GitHub issue，
   無法證明這一列拆出的任務全關了；驗收由有 GitHub 權限的 local implementation agent 回報。
-- **`--verify` 寫得出來才算做完。** 那是 PM 唯一真正需要的東西。
-  「測試一下」等於沒寫。要寫成「開哪個頁面 → 做什麼 → 看到什麼」。
-- **`--changed` 用白話。** PM 不看 commit，不要貼 SHA 或函式名。
-  可以重複給，一句一個 `--changed`。
+- **前端單一律 `--report`，不要用 `--changed`／`--verify` 湊。** 模板見下面那節。
+  「怎麼驗收」寫得出來才算做完，那是 PM 唯一真正需要的東西 ——
+  「測試一下」等於沒寫，要寫成「開哪個頁面 → 做什麼 → 看到什麼」。
+  白話：PM 不看 commit，不要貼 SHA 或函式名。
 - **`--url` 要帶測試連結，`ready` 才跑得動。** 前端的分支預覽網址是
   branch 名稱把 `/` 與其他非英數字元換成 `-`，接
   `.teamsync-frontend.pages.dev` —— `fix/spc-update` →
@@ -239,6 +243,27 @@ Slack 在建列時就替每一列開好串了，腳本只查既有串、不另�
 絕不拿 assignee 猜。
 
 沒有任何刪除指令。要撤回已發的訊息，跟使用者說，讓他自己刪。
+
+### 驗收報告固定四段
+
+`--report` 吃一份 md，整份就是 Slack 訊息本體。**照 [`report-template.md`](report-template.md) 寫**，
+四段是 `改了什麼` → `⚠️ 要先知道的一件事`（有才寫）→ `怎麼驗收` → `QA case` 表格。
+少任何一段腳本就不發，所以模板不用背 —— 忘了就跑一次看它罵什麼。
+
+- **✅ 只能來自實際跑過的測試。** 先跑（例：`vitest run src/app/modules/inventory`），
+  再把 `describe`／`it` 標題翻成 PM 看得懂的情境。**憑印象打勾就是給 PM 一份假的覆蓋率**，
+  而這件事腳本驗不了 —— 只有你會知道你沒跑。
+- **⬜ 後面要寫為什麼測不到**（「純顏色，要人工看」「你 08/17 驗過，這次沒動」）。
+  只打一個框，PM 分不出那是漏掉還是刻意不測。（這條腳本會擋。）
+- **「怎麼驗收」要指名現成資料**，寫「`PMV 低庫存示範品`」不要寫「找一個低庫存的品項」——
+  PM 得自己造資料的驗收步驟，等於沒寫。
+- **⚠️ 那段沒有行為改變就整段刪掉。** 固定要寫就會被硬填，填出來的是廢話，PM 下次整段跳過。
+
+md 的 H1 標題與「測試網址：」那行會被腳本拿掉（訊息本身已經有），檔案自己留著是對的。
+
+⚠️ **不要再用 `--md` 附一份同樣的報告。** 報告本體已經在訊息裡了，`--md` 是給真正額外的
+東西用的（截圖、PM 給的規格檔）。那個附件會寫進該列的「檔案」欄，而且是**累加**的
+（`bin/slack-list:1263`）—— 每跑一次 `ready` 就多一份，最後那一欄是一疊同名的舊版本。
 
 ### 讀回覆
 
