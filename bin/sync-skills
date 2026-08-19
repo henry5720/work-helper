@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# 把 skills/ 底下每個資料夾拉線到 agent 讀得到的兩個位置。
+# 可以重複跑：已存在的連結會被覆蓋，指向 work-helper 但來源已刪的死連結會被清掉。
+set -euo pipefail
+
+src="$(cd "$(dirname "${BASH_SOURCE[0]}")/../skills" && pwd)"
+targets=("$HOME/.agents/skills" "$HOME/.claude/skills")
+
+for t in "${targets[@]}"; do
+  mkdir -p "$t"
+
+  # 清掉指向 work-helper、但來源已經不在的連結
+  for link in "$t"/*; do
+    [ -L "$link" ] || continue
+    dest="$(readlink "$link")"
+    case "$dest" in
+      "$src"/*) [ -e "$link" ] || { rm "$link"; echo "removed $link"; } ;;
+    esac
+  done
+
+  for s in "$src"/*/; do
+    [ -f "$s/SKILL.md" ] || continue
+    n="$(basename "$s")"
+    ln -sfn "${s%/}" "$t/$n"
+    echo "linked  $t/$n"
+  done
+done

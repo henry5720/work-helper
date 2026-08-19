@@ -5,6 +5,7 @@
 
 ```
 bin/slack-list          讀「Bug/需求總表」，並把處理進度回報到 Slack
+bin/sync-skills         把 skills/ 全部拉線到 agent 讀得到的位置（新增 skill 後跑一次）
 skills/slack-todo/      ↑ 的 skill：讓 agent 知道有這個東西、什麼時候用
 skills/daily-worklog/   從 git commit 產工作日誌（產出寫進 work-docs）
 skills/fleet-recon/     平行查一批待辦的現況、每件寫成一份草稿（fleet 第一波）
@@ -18,22 +19,21 @@ CONTEXT.md              這條線上會混淆的詞（待辦列、任務、草�
 
 ## 裝成 skill
 
-skill 沒有安裝程式，就是把資料夾拉線進去。**拉兩個地方**：
-
 ```bash
-for s in ~/code/work-helper/skills/*/; do
-  n="$(basename "$s")"
-  ln -sfn "$s" ~/.agents/skills/"$n"    # 工具中立層，opencode 讀這裡
-  ln -sfn "$s" ~/.claude/skills/"$n"    # Claude Code 讀這裡
-done
+bin/sync-skills
 ```
+
+它把 `skills/` 底下每個有 `SKILL.md` 的資料夾拉線到**兩個地方** ——
+`~/.agents/skills/`（工具中立層，opencode 讀這裡）和 `~/.claude/skills/`（Claude Code 讀這裡），
+順便清掉指向這個 repo、但來源已經刪掉的死連結。可以重複跑。
+
+**新增或改名 skill 之後要再跑一次** —— 拉線是一次性的，`git pull` 只更新內容，
+不會替新資料夾建連結。
 
 `~/.agents/skills/` 是跨工具的共用位置（`npx skills` 裝的東西也在那）。
 opencode 官方文件列的搜尋路徑包含 `~/.agents/skills/*/SKILL.md`、
 `~/.claude/skills/*/SKILL.md` 和 `~/.config/opencode/skills/*/SKILL.md`，
 所以兩邊都拉最保險 —— 不用去賭它跟不跟隨 symlink。
-
-之後 `git pull` 就自動更新，跟 `dotfiles` 部署 `.zshrc` 是同一招。
 
 ## 需要什麼
 
