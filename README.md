@@ -13,6 +13,7 @@ bin/sync-skills         把 .claude/skills/ 全部拉線到別的 repo 也叫得
 .claude/skills/grilling/        釐清需求的訪談（第三方，見 skills-lock.json）
 .claude/skills/caveman/         壓縮輸出的講話模式（第三方，見 skills-lock.json）
 skills-lock.json        第三方 skill 的來源與 hash；更新用 `npx skills update -p`
+docs/adr/0011-...       skill 為什麼放 .claude/skills、為什麼是每支一條 symlink
 drafts/                 偵察的草稿（消耗品，gitignore，看完就派工或開 issue 然後刪）
 docs/fleet-flow.md      fleet 的架構與規則：誰是誰、誰跟誰交接、你在哪介入
 docs/fleet-dry-run-checklist.md  跑一輪 fleet 的打勾表（消耗品，跑完清空）
