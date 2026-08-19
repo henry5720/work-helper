@@ -60,7 +60,7 @@ class SlackListTest(unittest.TestCase):
         self.assertIn("[RecA]", output.getvalue())
         self.assertNotIn("RecB", output.getvalue())
         self.assertNotIn("RecC", output.getvalue())
-        self.assertIn("1 列（全表 3 列）", errors.getvalue())
+        self.assertIn("1 列未完成（全表 3 列", errors.getvalue())
 
     def test_assigned_rejects_non_slack_user_id(self):
         with self.assertRaises(SystemExit), patch.object(
@@ -71,11 +71,17 @@ class SlackListTest(unittest.TestCase):
     @patch.object(slack_list, "print_assigned")
     @patch.object(slack_list, "my_user_id", return_value="U123")
     def test_mine_uses_local_user_id(self, my_user_id, print_assigned):
-        with patch.object(sys, "argv", ["slack-list", "mine", "庫存"]):
-            slack_list.cmd_mine()
+        slack_list.cmd_mine(["庫存"])
 
         my_user_id.assert_called_once_with()
-        print_assigned.assert_called_once_with("U123", "庫存")
+        print_assigned.assert_called_once_with("U123", "庫存", False)
+
+    @patch.object(slack_list, "print_assigned")
+    @patch.object(slack_list, "my_user_id", return_value="U123")
+    def test_mine_reads_all_as_a_flag_not_as_the_keyword(self, my_user_id, print_assigned):
+        # 舊版直接拿 sys.argv[2] 當關鍵字，`mine --all 庫存` 會去比對「--all」這個字
+        slack_list.cmd_mine(["--all", "庫存"])
+        print_assigned.assert_called_once_with("U123", "庫存", True)
 
     def test_issue_mode_accepts_manual_and_rejects_other_values(self):
         with patch.object(slack_list, "load_env"), patch.dict(
@@ -664,6 +670,59 @@ class SlackListTest(unittest.TestCase):
         with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as err:
             slack_list.cmd_ready(["RecA", "--no-url"])
         self.assertIn("--report", err.getvalue())
+
+    def completed_rows(self):
+        return [
+            {"id": "RecOpen", "fields": [
+                {"key": "todo_completed", "checkbox": False},
+                {"key": "name", "text": "還沒做完"},
+            ]},
+            {"id": "RecDone", "fields": [
+                {"key": "todo_completed", "checkbox": True},
+                {"key": "name", "text": "已經做完"},
+            ]},
+            {"id": "RecArchived", "archived": True, "fields": [
+                {"key": "todo_completed", "checkbox": False},
+                {"key": "name", "text": "被封存"},
+            ]},
+        ]
+
+    def test_active_rows_drops_completed_and_archived(self):
+        kept = slack_list.active_rows(self.completed_rows())
+        self.assertEqual([r["id"] for r in kept], ["RecOpen"])
+
+    @patch.object(slack_list, "fetch_all")
+    def test_todo_defaults_to_open_rows_and_says_the_view_is_filtered(self, fetch_all):
+        fetch_all.return_value = self.completed_rows()
+        output, errors = io.StringIO(), io.StringIO()
+        with redirect_stdout(output), redirect_stderr(errors):
+            slack_list.cmd_todo([])
+
+        self.assertIn("還沒做完", output.getvalue())
+        self.assertNotIn("已經做完", output.getvalue())
+        # 沒有這句，agent 會把過濾後的結果當成整張表，回「PM 沒有這件事」
+        self.assertIn("--all", errors.getvalue())
+        self.assertIn("1 列未完成（全表 3 列", errors.getvalue())
+
+    @patch.object(slack_list, "fetch_all")
+    def test_todo_all_includes_completed_rows(self, fetch_all):
+        fetch_all.return_value = self.completed_rows()
+        output, errors = io.StringIO(), io.StringIO()
+        with redirect_stdout(output), redirect_stderr(errors):
+            slack_list.cmd_todo(["--all"])
+
+        self.assertIn("已經做完", output.getvalue())
+        self.assertIn("被封存", output.getvalue())
+        self.assertIn("含已完成", errors.getvalue())
+
+    @patch.object(slack_list, "fetch_all")
+    def test_json_defaults_to_open_rows(self, fetch_all):
+        fetch_all.return_value = self.completed_rows()
+        output = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(io.StringIO()):
+            slack_list.cmd_json([])
+
+        self.assertEqual([r["_id"] for r in json.loads(output.getvalue())], ["RecOpen"])
 
 
 if __name__ == "__main__":

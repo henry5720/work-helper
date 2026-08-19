@@ -80,6 +80,11 @@ bin/slack-list context --channel C0B9… --thread-ts 1234567890.123456
 `todo` 是預設，`bin/slack-list` 不帶參數就是它。
 
 `mine` 給沒有 Slack message context 的 local agent使用，以 `.env` 的
+`todo`／`mine`／`assigned`／`json` **預設只印未完成的列** —— 全表 409 列裡 234 列已完成，
+全印是 20 萬字，而讀它的通常是 agent，那 20 萬字就是 token。要看全部加 `--all`；
+每次印完 stderr 都會說明這是哪一種視角，免得把過濾後的結果當成整張表。
+「已完成的不算」在 `add` 的查重那邊本來就是這個語意（`active_duplicate`）。
+
 `SLACK_MY_USER_ID` 解釋「我」。OpenAB收到 Slack訊息時已知道當次 `sender_id`，要用
 `assigned <sender_id>`；不要把共享環境裡的固定 ID當成目前說話的人。
 

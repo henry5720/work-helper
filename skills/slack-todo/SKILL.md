@@ -42,7 +42,13 @@ cd ~/code/work-helper
 ./bin/slack-list assigned U0B… 庫存  # 指派給指定 Slack 使用者，可再加關鍵字
 ./bin/slack-list json      # 壓平後的 JSON，要程式處理時用
 ./bin/slack-list fields    # 不確定欄位叫什麼的時候先跑這個
+./bin/slack-list mine --all  # 連已完成的也要（`todo`／`json`／`assigned` 也吃 --all）
 ```
+
+⚠️ **`todo`／`mine`／`assigned`／`json` 預設只印未完成的列。** 全表 409 列裡 234 列已完成，
+全印是 20 萬字，那 20 萬字會整包進你的 context。**所以找不到一件事的時候，加 `--all` 再找一次
+才算找過**，不要直接回「表上沒有這件事」—— 它很可能只是已完成。每次印完 stderr 都會告訴你
+這是哪一種視角。
 
 從 terminal/local agent問「我身上有什麼事」「跟 X 有關的」用 `mine`。
 從 OpenAB 回應 Slack 訊息時，「我」是 `openab.sender.v1.sender_id`，用
@@ -254,6 +260,10 @@ Slack 在建列時就替每一列開好串了，腳本只查既有串、不另�
 - **⚠️ 那段沒有行為改變就整段刪掉。** 固定要寫就會被硬填，填出來的是廢話，PM 下次整段跳過。
 
 md 的 H1 標題與「測試網址：」那行會被腳本拿掉（訊息本身已經有），檔案自己留著是對的。
+
+⚠️ **不要再用 `--md` 附一份同樣的報告。** 報告本體已經在訊息裡了，`--md` 是給真正額外的
+東西用的（截圖、PM 給的規格檔）。那個附件會寫進該列的「檔案」欄，而且是**累加**的
+（`bin/slack-list:1263`）—— 每跑一次 `ready` 就多一份，最後那一欄是一疊同名的舊版本。
 
 ### 讀回覆
 

@@ -212,6 +212,36 @@ def fetch_all():
             return items
 
 
+def active_rows(items):
+    """只留還沒完成、也沒被封存的列 —— 讀取指令的預設視角。
+
+    全表 409 列裡有 234 列已完成，全印出來是 20 萬字，而 agent 每次讀進 context
+    的就是那 20 萬字；只印未完成是 7 萬字。要看全部加 --all。
+    「已完成的不算」在 add 的查重那邊已經是既有語意（見 active_duplicate）。
+    """
+    out = []
+    for item in items:
+        if item.get("archived"):
+            continue
+        done = any(f.get("key") == "todo_completed" and checkbox_value(f)
+                   for f in item.get("fields") or [])
+        if not done:
+            out.append(item)
+    return out
+
+
+def scope_note(shown, total, include_done, extra=""):
+    """印在 stderr 的範圍說明。
+
+    一定要講清楚這是不是完整的表 —— 少了這句，agent 看到過濾後的結果會直接
+    回「PM 沒有這件事」，而那件事只是已完成。
+    """
+    if include_done:
+        return f"—— {extra}{shown} 列（全表 {total} 列，含已完成）"
+    return (f"—— {extra}{shown} 列未完成"
+            f"（全表 {total} 列；已完成的沒印，要看加 --all）")
+
+
 def plain(v):
     """把一格的值壓成純文字。rich_text 是巢狀結構，遞迴撈出來。"""
     out = []
@@ -660,24 +690,47 @@ def cmd_fields():
     print(json.dumps(out, ensure_ascii=False, indent=2))
 
 
-def cmd_todo():
-    """人和 agent 都看得懂的一行一列。"""
-    for row in (flatten(i) for i in fetch_all()):
+def print_rows(rows):
+    for row in (flatten(i) for i in rows):
         rid = row.pop("_id", "")
         cells = " ｜ ".join(f"{k}: {v}" for k, v in row.items())
         print(f"[{rid}] {cells}")
 
 
-def cmd_json():
+def all_flag(parser):
+    parser.add_argument("--all", action="store_true",
+                        help="連已完成的列也印（預設只印未完成）")
+    return parser
+
+
+def cmd_todo(argv):
+    """人和 agent 都看得懂的一行一列。"""
+    args = all_flag(argparse.ArgumentParser(
+        prog="slack-list todo",
+        description="一行一列。預設只印未完成的列。")).parse_args(argv)
+    rows = fetch_all()
+    shown = rows if args.all else active_rows(rows)
+    print_rows(shown)
+    print(scope_note(len(shown), len(rows), args.all), file=sys.stderr)
+
+
+def cmd_json(argv):
     """壓平後的 JSON，給下游程式吃。"""
-    print(json.dumps([flatten(i) for i in fetch_all()], ensure_ascii=False, indent=2))
+    args = all_flag(argparse.ArgumentParser(
+        prog="slack-list json",
+        description="壓平後的 JSON。預設只印未完成的列。")).parse_args(argv)
+    rows = fetch_all()
+    shown = rows if args.all else active_rows(rows)
+    print(json.dumps([flatten(i) for i in shown], ensure_ascii=False, indent=2))
+    print(scope_note(len(shown), len(rows), args.all), file=sys.stderr)
 
 
-def print_assigned(uid, kw=""):
+def print_assigned(uid, kw="", include_done=False):
     """印出指派給指定 Slack 使用者的列，可再比對整列關鍵字。"""
     if not re.fullmatch(r"U[A-Z0-9]+", uid):
         die("Slack user ID 要是 U 開頭，例如 U0B54FKJ93R")
-    rows = [flatten(i) for i in fetch_all()]
+    items = fetch_all()
+    rows = [flatten(i) for i in (items if include_done else active_rows(items))]
     assigned = [r for r in rows if uid in (r.get("todo_assignee") or "").split()]
     if kw:
         assigned = [r for r in assigned if kw in json.dumps(r, ensure_ascii=False)]
@@ -685,25 +738,31 @@ def print_assigned(uid, kw=""):
         rid = row.pop("_id", "")
         cells = " ｜ ".join(f"{k}: {v}" for k, v in row.items())
         print(f"[{rid}] {cells}")
-    scope = f"指派給 {uid}" + (f" 且含「{kw}」" if kw else "")
-    print(f"\n—— {scope}：{len(assigned)} 列（全表 {len(rows)} 列）", file=sys.stderr)
+    scope = f"指派給 {uid}" + (f" 且含「{kw}」" if kw else "") + "："
+    print("\n" + scope_note(len(assigned), len(items), include_done, scope),
+          file=sys.stderr)
 
 
-def cmd_mine():
+def cmd_mine(argv):
     """Local 用：只印指派給 SLACK_MY_USER_ID 的列。"""
-    kw = sys.argv[2] if len(sys.argv) > 2 else ""
-    print_assigned(my_user_id(), kw)
+    ap = all_flag(argparse.ArgumentParser(
+        prog="slack-list mine",
+        description="只印指派給自己的待辦列。預設只印未完成。"))
+    ap.add_argument("keyword", nargs="?", default="", help="可選，過濾整列文字")
+    args = ap.parse_args(argv)
+    print_assigned(my_user_id(), args.keyword, args.all)
 
 
 def cmd_assigned(argv):
     """共享 agent 用：只印指派給當次 Slack sender 的列。"""
-    ap = argparse.ArgumentParser(
+    ap = all_flag(argparse.ArgumentParser(
         prog="slack-list assigned",
-        description="只印指派給指定 Slack 使用者的待辦列，可再用關鍵字過濾整列。")
+        description="只印指派給指定 Slack 使用者的待辦列，可再用關鍵字過濾整列。"
+                    "預設只印未完成。"))
     ap.add_argument("user_id", help="Slack sender ID（U… 開頭）")
     ap.add_argument("keyword", nargs="?", default="", help="可選，過濾整列文字")
     args = ap.parse_args(argv)
-    print_assigned(args.user_id, args.keyword)
+    print_assigned(args.user_id, args.keyword, args.all)
 
 
 def active_duplicate(rows, title, cols):
@@ -1229,9 +1288,6 @@ def cmd_env():
 
 
 READ_COMMANDS = {
-    "todo": (cmd_todo, "一行一列，人看的（預設）"),
-    "mine": (cmd_mine, "只印指派給我的列，可多帶一個關鍵字再過濾"),
-    "json": (cmd_json, "壓平後的 JSON，給程式吃"),
     "raw": (cmd_raw, "Slack 原始回應，完整不加工"),
     "sample": (cmd_sample, "只印第一列的原始結構"),
     "fields": (cmd_fields, "這張表有哪些欄位、各是什麼型別"),
@@ -1241,6 +1297,9 @@ READ_COMMANDS = {
 
 # 這幾支自己吃參數，各自有 --help
 ARG_READ_COMMANDS = {
+    "todo": (cmd_todo, "一行一列，人看的（預設）；只印未完成，--all 看全部"),
+    "mine": (cmd_mine, "只印指派給我的未完成列，可多帶一個關鍵字再過濾"),
+    "json": (cmd_json, "壓平後的 JSON，給程式吃；只印未完成，--all 看全部"),
     "assigned": (cmd_assigned, "只印指派給指定 Slack user ID 的列，可再加關鍵字"),
     "replies": (cmd_replies, "讀 item 留言串；不帶 record_id 就掃出「有別人回過」的那幾列"),
     "context": (cmd_context, "用 OpenAB channel/thread 反查待辦列與完整留言"),
@@ -1258,9 +1317,10 @@ WRITE_COMMANDS = {
 def usage():
     print("用法：slack-list <指令> [參數]\n")
     print("讀取：")
-    for k, (_, desc) in READ_COMMANDS.items():
-        print(f"  {k:<9} {desc}")
+    # 常用的先印 —— todo 是預設指令，不該排在 raw / sample 後面
     for k, (_, desc) in ARG_READ_COMMANDS.items():
+        print(f"  {k:<9} {desc}")
+    for k, (_, desc) in READ_COMMANDS.items():
         print(f"  {k:<9} {desc}")
     print("\n寫入 Slack（詳細參數看 `slack-list <指令> --help`）：")
     for k, (_, desc) in WRITE_COMMANDS.items():
