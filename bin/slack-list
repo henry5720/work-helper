@@ -309,7 +309,9 @@ def column_index():
     try:
         token, list_id = config()
         cols = schema(token, list_id, required=())
-    except Exception as exc:  # 拿不到 schema 就退回內部 id，不要讓讀取整個掛掉
+    # 拿不到 schema 就退回內部 id，不要讓讀取整個掛掉。SystemExit 也要接 ——
+    # 沒設定 .env 時 config() 走的是 die()，而 die() 是 sys.exit()，不是 Exception。
+    except (Exception, SystemExit) as exc:
         print(f"（讀不到欄位定義，欄位名會顯示成內部 id：{exc}）", file=sys.stderr)
         _COLUMN_INDEX = ({}, {})
         return _COLUMN_INDEX
@@ -339,7 +341,7 @@ def text_columns():
     try:
         token, list_id = config()
         cols = schema(token, list_id, required=())
-    except Exception:
+    except (Exception, SystemExit):  # 同 column_index：die() 丟的是 SystemExit
         _TEXT_COLUMNS = set()
         return _TEXT_COLUMNS
     _TEXT_COLUMNS = {n for n, c in cols.items()
@@ -874,6 +876,16 @@ def cmd_json(argv):
                      done=done_count(shown) if args.all else None), file=sys.stderr)
 
 
+def assignees(row):
+    """一列的指派對象 user ID。
+
+    欄位名平常是「指派對象」，但 column_index() 拿不到 schema 時會退回內部 key，
+    那時是 todo_assignee。兩個都認 —— 只認一個的話 rows --assignee 會安靜地回 0 列，
+    而 0 列跟「真的沒有」長得一樣。
+    """
+    return (row.get(COL_ASSIGNEE) or row.get("todo_assignee") or "").split()
+
+
 def print_assigned(uid, kw="", include_done=False, full=False):
     """印出指派給指定 Slack 使用者的列，可再比對整列關鍵字。"""
     if not re.fullmatch(r"U[A-Z0-9]+", uid):
@@ -881,7 +893,7 @@ def print_assigned(uid, kw="", include_done=False, full=False):
     items = fetch_all()
     pairs = [(i, flatten(i)) for i in (items if include_done else active_rows(items))]
     assigned = [(i, r) for i, r in pairs
-                if uid in (r.get(COL_ASSIGNEE) or r.get("todo_assignee") or "").split()]
+                if uid in assignees(r)]
     if kw:
         assigned = [(i, r) for i, r in assigned
                     if kw in json.dumps(r, ensure_ascii=False)]
@@ -1000,7 +1012,7 @@ def cmd_rows(argv):
 
     picked = []
     for item, row in pairs:
-        if args.assignee and args.assignee not in (row.get(COL_ASSIGNEE) or "").split():
+        if args.assignee and args.assignee not in assignees(row):
             continue
         if args.created_by and item.get("created_by") != args.created_by:
             continue

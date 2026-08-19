@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -17,8 +18,23 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 slack_list = importlib.util.module_from_spec(spec)
 loader.exec_module(slack_list)
 
+# setUp 會把這兩支換成假的（見裡面的說明），要測它們本身得先留一份真的。
+REAL_COLUMN_INDEX = slack_list.column_index
+REAL_TEXT_COLUMNS = slack_list.text_columns
+
 
 class SlackListTest(unittest.TestCase):
+    def setUp(self):
+        # 這兩支會打 files.info 拿欄位定義。不擋掉的話整份測試會依賴網路和一份
+        # 真的 .env —— 實測 cmd_todo 一次就送出兩個 request。
+        # 回傳值跟「拿不到 schema」的退路一致：欄位名退回內部 key，不截斷。
+        for name, value in (("column_index", ({}, {})), ("text_columns", set())):
+            patcher = patch.object(slack_list, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        slack_list._COLUMN_INDEX = None
+        slack_list._TEXT_COLUMNS = None
+
     def add_schema(self):
         return {
             slack_list.COL_TITLE: {"id": "title-col"},
@@ -829,6 +845,146 @@ class SlackListTest(unittest.TestCase):
 
         self.assertEqual(output.getvalue(), "")
         self.assertIn("已停用的帳號或 bot", errors.getvalue())
+
+    # --- rows：唯一的查詢入口，條件都疊在 flag 上 ---
+
+    def query_rows(self):
+        """一份夠小、但每個 flag 都咬得到的表。"""
+        return [
+            {"id": "RecA", "created_by": "U_PM", "fields": [
+                {"key": "todo_completed", "checkbox": False},
+                {"key": "todo_assignee", "user": ["U_HENRY", "U_WHALES"]},
+                {"key": "name", "text": "庫存模組"},
+                {"key": "status", "text": "PM確認中"},
+                {"key": "kind", "text": "bug"},
+            ]},
+            {"id": "RecB", "created_by": "U_PM", "fields": [
+                {"key": "todo_completed", "checkbox": True},
+                {"key": "todo_assignee", "user": ["U_HENRY"]},
+                {"key": "name", "text": "舊的庫存問題"},
+                {"key": "status", "text": "PM確認中"},
+                {"key": "kind", "text": "bug"},
+            ]},
+            {"id": "RecC", "created_by": "U_OTHER", "fields": [
+                {"key": "todo_completed", "checkbox": False},
+                {"key": "todo_assignee", "user": ["U_HENRY2"]},
+                {"key": "name", "text": "報表匯出"},
+                {"key": "status", "text": "前端完成"},
+                {"key": "kind", "text": "request"},
+            ]},
+        ]
+
+    def run_rows(self, argv):
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(slack_list, "fetch_all", return_value=self.query_rows()), \
+                redirect_stdout(output), redirect_stderr(errors):
+            slack_list.cmd_rows(argv)
+        ids = re.findall(r"\[(Rec\w+)\]", output.getvalue())
+        return ids, output.getvalue(), errors.getvalue()
+
+    def test_rows_defaults_to_open_rows(self):
+        ids, _, errors = self.run_rows([])
+
+        self.assertEqual(ids, ["RecA", "RecC"])   # RecB 已完成
+        self.assertIn("2 列未完成", errors)
+
+    def test_rows_stacks_conditions_with_and_not_or(self):
+        ids, _, _ = self.run_rows(["--created-by", "U_PM", "--where", "status=PM確認中"])
+
+        self.assertEqual(ids, ["RecA"])
+
+    def test_rows_where_is_a_case_insensitive_substring_match(self):
+        # 欄位值是 PM 在 UI 上維護的，要求完全相符等於每次改字都壞掉
+        ids, _, _ = self.run_rows(["--where", "kind=BU"])
+
+        self.assertEqual(ids, ["RecA"])
+
+    def test_rows_where_accepts_a_partial_column_name(self):
+        ids, _, _ = self.run_rows(["--where", "stat=前端"])
+
+        self.assertEqual(ids, ["RecC"])
+
+    def test_rows_assignee_matches_a_whole_user_id(self):
+        # U_HENRY 不該撈出 U_HENRY2 —— 子字串比對會把別人的事算到你頭上
+        ids, _, _ = self.run_rows(["--assignee", "U_HENRY"])
+
+        self.assertEqual(ids, ["RecA"])
+
+    def test_rows_created_by_reads_the_item_not_a_column(self):
+        # 建立者不在 fields 裡，在 item 上
+        ids, _, _ = self.run_rows(["--created-by", "U_OTHER"])
+
+        self.assertEqual(ids, ["RecC"])
+
+    def test_rows_keyword_matches_anywhere_in_the_row(self):
+        ids, _, _ = self.run_rows(["匯出"])
+
+        self.assertEqual(ids, ["RecC"])
+
+    def test_rows_columns_prints_only_the_named_columns(self):
+        ids, output, _ = self.run_rows(["--columns", "name", "--assignee", "U_HENRY"])
+
+        self.assertEqual(ids, ["RecA"])
+        self.assertEqual(output.strip(), "[RecA] name: 庫存模組")
+
+    def test_rows_all_reports_how_many_of_them_are_done(self):
+        # --columns 常常把「已完成」欄擋掉，這個數字是 agent 唯一的線索。
+        # 實際發生過：加了 --all 從 6 件變 26 件，多的 20 件全已結案，回覆只說「共 26 件」。
+        ids, _, errors = self.run_rows(["--where", "status=PM確認中", "--all"])
+
+        self.assertEqual(ids, ["RecA", "RecB"])
+        self.assertIn("其中 1 列已完成", errors)
+
+    def test_rows_without_all_never_mentions_a_done_count(self):
+        _, _, errors = self.run_rows(["--where", "status=PM確認中"])
+
+        self.assertNotIn("其中", errors)
+        self.assertIn("要看加 --all", errors)
+
+    def test_rows_empty_result_lists_the_values_that_column_actually_has(self):
+        # 值打錯和「真的沒有」長得一模一樣，不列出來就分不出
+        _, output, errors = self.run_rows(["--where", "status=不存在"])
+
+        self.assertEqual(output, "")
+        self.assertIn("0 列未完成", errors)
+        self.assertIn("PM確認中×1", errors)
+        self.assertIn("前端完成×1", errors)
+
+    def test_rows_empty_result_summarises_a_high_cardinality_column(self):
+        # 幾百種值全列出來又是一份雜訊
+        many = [{"id": f"Rec{i}", "created_by": "U_PM", "fields": [
+            {"key": "todo_completed", "checkbox": False},
+            {"key": "name", "text": f"事項 {i}"},
+        ]} for i in range(30)]
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(slack_list, "fetch_all", return_value=many), \
+                redirect_stdout(output), redirect_stderr(errors):
+            slack_list.cmd_rows(["--where", "name=不存在"])
+
+        self.assertIn("有 30 種值", errors.getvalue())
+        self.assertNotIn("事項 29×1、事項 28×1", errors.getvalue())
+
+    def test_rows_rejects_an_unknown_where_column(self):
+        with self.assertRaises(SystemExit), patch.object(
+            slack_list, "die", side_effect=SystemExit
+        ):
+            self.run_rows(["--where", "不存在的欄位=x"])
+
+    def test_rows_rejects_a_where_without_an_equals_sign(self):
+        with self.assertRaises(SystemExit), patch.object(
+            slack_list, "die", side_effect=SystemExit
+        ):
+            self.run_rows(["--where", "status"])
+
+    def test_schema_lookups_survive_a_missing_env(self):
+        # config() 走的是 die()，而 die() 是 sys.exit()，不是 Exception。
+        # 沒接住的話「沒有 .env 就退回內部 id」這條退路根本走不到，整支直接掛掉。
+        slack_list._COLUMN_INDEX = None
+        slack_list._TEXT_COLUMNS = None
+        with patch.object(slack_list, "config", side_effect=SystemExit(1)), \
+                redirect_stderr(io.StringIO()):
+            self.assertEqual(REAL_COLUMN_INDEX(), ({}, {}))
+            self.assertEqual(REAL_TEXT_COLUMNS(), set())
 
 
 if __name__ == "__main__":
