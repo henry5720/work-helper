@@ -1,11 +1,11 @@
 ---
 name: slack-todo
-description: 讀 PM 記在 Slack「Bug/需求總表」上的待辦，並在該列的留言串回報進度。當使用者問「PM 有什麼待辦」「Bug/需求總表」「PM 有沒有回我」時使用；要在 Slack list 某一列加回覆／留言／回報進度／通知 PM 驗收時也用。
+description: 讀寫 Slack「Bug/需求總表」上的待辦，並在該列的留言串回報進度。當使用者問「PM 有什麼待辦」「新增待辦」「Bug/需求總表」「PM 有沒有回我」時使用；要建立或指派 Slack list 待辦、設定回報對象、加回覆／留言／回報進度／通知 PM 驗收時也用。
 ---
 
 # PM 的待辦表
 
-PM（chieh）把 bug 與需求記在 Slack 的一張 List：**Bug/需求總表**。
+PM（chieh）與授權使用者把 bug 與需求記在 Slack 的一張 List：**Bug/需求總表**。
 讀它、看懂它、把處理進度回報回去，都走 `~/code/work-helper/bin/slack-list`。
 
 **不要自己組 curl，也不要用 Slack MCP 做這件事。** 腳本已經處理翻頁、
@@ -61,6 +61,58 @@ OpenAB 每則訊息會附 `openab.sender.v1` JSON。人在 item 留言串直接 
 ./bin/slack-list context --channel <channel_id> --thread-ts <thread_id>
 ```
 
+## ➕ 建立待辦
+
+`add` 是 single-writer command，只由 OpenAB backlog agent執行。Local agent不要跑 `add`；local與
+遠端不共享process lock，同時查重後可能各建一列。其他讀取、`reporter`、`progress`、`ready`
+仍照各自權限在local使用。
+
+只有使用者明確要求「新增／建立待辦」才寫入。使用者明確給標題時直接建立；若要從一大段話
+濃縮標題或敘述，先把準備寫入的內容貼出來確認。到期日按 `Asia/Taipei` 換成實際
+`YYYY-MM-DD`，回覆時也顯示該日期；沒把握就問，不要猜。
+
+OpenAB 一律把當次 `sender_id` 同時傳給 `--assignee` 與 `--requested-by`：
+
+```bash
+./bin/slack-list add \
+  --title "<使用者明確給出或已確認的標題>" \
+  --description "<選填>" \
+  --due YYYY-MM-DD \
+  --assignee <openab.sender.v1.sender_id> \
+  --requested-by <openab.sender.v1.sender_id> \
+  --source-channel <openab.sender.v1.channel_id> \
+  --source-thread <openab.sender.v1.thread_id>
+```
+
+使用者明確說「回報給 @某人」時，從 Slack mention 取可靠的 `U…` ID，加
+`--report-to U…`。說「不要通知任何人」才加 `--no-reporter`。不能用顯示名稱猜 ID，
+app 沒有 `users:read`。沒特別說時預設回報給 sender。
+
+`add` 會自行處理精確同名：active列存在時不建第二列，而是把 sender 追加到 assignees，
+並補一則再次回報的來源；原本就有 sender 時只補來源。既有列在「PM確認中」時不改指派，
+只回既有連結。使用者確認是復發或另一件事後，才用同一組參數加 `--force`。
+命中既有列時保留原回報對象，`add` 的 `--report-to` / `--no-reporter` 不套用；使用者看過合併結果後
+仍要改，才另跑 `reporter`。
+
+從既有 item 留言串要求新增時，**即使標題不同也先顯示目前待辦與準備新增的內容，確認是另一件事**。
+腳本也會擋下第一次呼叫；確認後才加 `--force`。不要為了省一次對話直接略過。
+
+成功後只回新增／合併結果、實際到期日及 deep link。若工具說列已建立但來源／回報設定失敗，
+照實回報；不要重跑 `add`，否則可能建出重複列。若是「建立結果不明」，也先到List搜尋同名列，
+不能直接重跑。這支工具不修改標題、敘述、日期，也不刪列。
+
+### 設定既有列的回報對象
+
+任何授權使用者都能在 item 留言串明確要求變更；用 `context` 取得 record ID後執行：
+
+```bash
+./bin/slack-list reporter Rec0B… --user U0B…  # 回報給被 mention 的一人
+./bin/slack-list reporter Rec0B… --default    # 真人建立者／bot 建列發起者
+./bin/slack-list reporter Rec0B… --none       # 驗收時不 @ 人
+```
+
+一列可以有多位指派對象，但回報對象至多一位。不要從 assignee 猜該通知誰。
+
 ---
 
 ## 🔍 被派去查一件待辦時
@@ -81,7 +133,7 @@ OpenAB 每則訊息會附 `openab.sender.v1` JSON。人在 item 留言串直接 
 - `agent`：照本節既有流程，用 `gh` 查重並開 issue。
 - `manual`：**沒有 GitHub credential，不准嘗試 `gh` 或要求 token。** 偵察寫完草稿後，用
   `slack-list draft` 把 Markdown、指紋搜尋頁與 New issue 頁交回原生 item 留言串，然後停。
-  只有既有待辦列能走這條發布流程；DM 或一般 channel 的口述需求要先對應到待辦列。
+  只有既有待辦列能走這條發布流程；DM 或一般 channel 的口述需求要先用 `add` 對應到待辦列。
 
 ```bash
 ./bin/slack-list draft Rec0B… \
@@ -138,7 +190,8 @@ issue 格式走 `~/code/teamsync-frontend` 的
 ## 📣 回報
 
 **回報寫進該列原生的 item 留言串** —— PM 本來就在那裡講話。
-Slack 在建列時就替每一列開好串了，腳本只查不建，對應關係也不用維護（Slack 自己是正本）。
+Slack 在建列時就替每一列開好串了，腳本只查既有串、不另建串，對應關係也不用維護
+（Slack 自己是正本）。
 
 ⚠️ 舊版說「List 項目的留言串沒有 API」，那是拿 `slackLists.*` 試出來的結論 ——
 問對了問題、用錯了 API。留言歸 `conversations.*` 管，讀寫都通。
@@ -181,8 +234,9 @@ Slack 在建列時就替每一列開好串了，腳本只查不建，對應關�
 
 `--quiet` 不 `@` 人，只有使用者明講「先別吵他」時才用。
 
-⚠️ **`@` 的是「回報對象」（`created_by`，把這列寫上表的人），不是「指派對象」。**
-指派對象是負責做的人，通常就是你自己 —— `@` 他等於沒通知任何人。
+⚠️ **`@` 的是「回報對象」，不是「指派對象」。** 明確 `reporter` 設定優先；沒有設定時，
+真人建立的列用 `created_by`，bot 代建的列用來源註記裡的發起者。找不到就不 `@` 人，
+絕不拿 assignee 猜。
 
 沒有任何刪除指令。要撤回已發的訊息，跟使用者說，讓他自己刪。
 
@@ -208,6 +262,8 @@ PM 的回覆都在該列的 item 留言串裡。
 | 欄位 | 壓平後的鍵 | 內容 |
 |---|---|---|
 | 指派對象 | `todo_assignee` | user ID，例如 `U0B54FKJ93R`。**一列可以掛多人**，壓平後是空白分隔的字串 |
+| 已完成 | `todo_completed` | checkbox；勾選或封存的列不擋同名新需求 |
+| 到期日 | `todo_due_date` | `YYYY-MM-DD`，相對日期以 `Asia/Taipei` 換算 |
 | 名稱 | `name` | 帶前綴代號，例如 `T04 退貨表供應商欄位刪除`、`V01 在途欄位調整` |
 | 敘述 | `Col0B8E4BG7JT` | 一段說明，**常常被截斷或只有幾個字** |
 | 狀態 | `Col0B9U6UHD16` | 多選，值是 `OptXXXX` 代碼**不是人看的字串**；要對照文字跑 `fields` |

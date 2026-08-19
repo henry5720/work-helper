@@ -18,6 +18,22 @@ loader.exec_module(slack_list)
 
 
 class SlackListTest(unittest.TestCase):
+    def add_schema(self):
+        return {
+            slack_list.COL_TITLE: {"id": "title-col"},
+            slack_list.COL_DESCRIPTION: {"id": "description-col"},
+            slack_list.COL_ASSIGNEE: {"id": "assignee-col"},
+            slack_list.COL_DUE: {"id": "due-col"},
+            slack_list.COL_COMPLETED: {"id": "completed-col"},
+            slack_list.COL_STATUS: {
+                "id": "status-col",
+                "options": {"choices": [{
+                    "label": slack_list.STATUS_READY,
+                    "value": "ready-opt",
+                }]},
+            },
+        }
+
     @patch.object(slack_list, "fetch_all")
     def test_assigned_matches_exact_user_id_and_keyword(self, fetch_all):
         fetch_all.return_value = [
@@ -116,6 +132,349 @@ class SlackListTest(unittest.TestCase):
         self.assertEqual(body["messages"], [{
             "ts": "1.2", "user": "U1", "bot_id": "", "text": "為什麼？", "files": []
         }])
+
+    @patch.object(slack_list, "post_record_note", return_value=True)
+    @patch.object(slack_list, "api")
+    @patch.object(slack_list, "fetch_all", return_value=[])
+    @patch.object(slack_list, "schema")
+    @patch.object(slack_list, "config", return_value=("token", "F123"))
+    def test_add_creates_title_description_due_and_self_assignment_atomically(
+        self, config, schema, fetch_all, api, post_record_note
+    ):
+        schema.return_value = self.add_schema()
+        api.return_value = {"item": {"id": "RecNew"}}
+
+        output = io.StringIO()
+        with patch.object(slack_list, "source_permalink", return_value="https://source"), \
+                redirect_stdout(output):
+            slack_list.cmd_add([
+                "--title", "庫存匯出缺少批號",
+                "--description", "匯出的 Excel 沒有批號欄",
+                "--due", "2026-08-21",
+                "--assignee", "U123",
+                "--requested-by", "U123",
+                "--report-to", "U999",
+                "--source-channel", "C999",
+                "--source-thread", "1.2",
+            ])
+
+        method, payload, token = api.call_args.args
+        self.assertEqual(method, "slackLists.items.create")
+        self.assertEqual(token, "token")
+        self.assertEqual(payload["list_id"], "F123")
+        by_column = {f["column_id"]: f for f in payload["initial_fields"]}
+        self.assertEqual(by_column["assignee-col"]["user"], ["U123"])
+        self.assertEqual(by_column["due-col"]["date"], ["2026-08-21"])
+        self.assertEqual(
+            by_column["title-col"]["rich_text"][0]["elements"][0]["elements"][0]["text"],
+            "庫存匯出缺少批號",
+        )
+        self.assertEqual(
+            by_column["description-col"]["rich_text"][0]["elements"][0]["elements"][0]["text"],
+            "匯出的 Excel 沒有批號欄",
+        )
+        post_record_note.assert_called_once_with(
+            "token", "F123", "RecNew", "U123", "U999", "https://source"
+        )
+        self.assertIn("已新增：庫存匯出缺少批號", output.getvalue())
+
+    @patch.object(slack_list, "post_duplicate_note", return_value=True)
+    @patch.object(slack_list, "api")
+    @patch.object(slack_list, "fetch_all")
+    @patch.object(slack_list, "schema")
+    @patch.object(slack_list, "config", return_value=("token", "F123"))
+    def test_add_appends_sender_to_active_exact_duplicate(
+        self, config, schema, fetch_all, api, post_duplicate_note
+    ):
+        schema.return_value = self.add_schema()
+        fetch_all.return_value = [{
+            "id": "RecOld",
+            "fields": [
+                {"column_id": "title-col", "text": "  庫存  匯出缺少批號  "},
+                {"column_id": "assignee-col", "user": ["U999"]},
+                {"column_id": "completed-col", "checkbox": False},
+                {"column_id": "status-col", "select": ["doing-opt"]},
+            ],
+        }]
+
+        output = io.StringIO()
+        with patch.object(slack_list, "source_permalink", return_value="https://source"), \
+                redirect_stdout(output):
+            slack_list.cmd_add([
+                "--title", "庫存 匯出缺少批號",
+                "--assignee", "U123",
+                "--requested-by", "U123",
+                "--report-to", "U456",
+                "--source-channel", "C999",
+                "--source-thread", "1.2",
+            ])
+
+        api.assert_called_once_with("slackLists.items.update", {
+            "list_id": "F123",
+            "id": "RecOld",
+            "cells": [{
+                "row_id": "RecOld",
+                "column_id": "assignee-col",
+                "user": ["U999", "U123"],
+            }],
+        }, "token")
+        post_duplicate_note.assert_called_once_with(
+            "token", "F123", "RecOld", "U123", "https://source"
+        )
+        self.assertIn("已加入既有待辦", output.getvalue())
+        self.assertIn("未變更原回報對象", output.getvalue())
+
+    @patch.object(slack_list, "post_duplicate_note")
+    @patch.object(slack_list, "api")
+    @patch.object(slack_list, "fetch_all")
+    @patch.object(slack_list, "schema")
+    @patch.object(slack_list, "config", return_value=("token", "F123"))
+    def test_add_does_not_assign_duplicate_awaiting_pm_review(
+        self, config, schema, fetch_all, api, post_duplicate_note
+    ):
+        schema.return_value = self.add_schema()
+        fetch_all.return_value = [{
+            "id": "RecReady",
+            "fields": [
+                {"column_id": "title-col", "text": "匯出缺欄位"},
+                {"column_id": "assignee-col", "user": ["U999"]},
+                {"column_id": "completed-col", "checkbox": False},
+                {"column_id": "status-col", "select": ["ready-opt"]},
+            ],
+        }]
+
+        output = io.StringIO()
+        with patch.object(slack_list, "source_permalink", return_value="https://source"), \
+                redirect_stdout(output):
+            slack_list.cmd_add([
+                "--title", "匯出缺欄位",
+                "--assignee", "U123",
+                "--requested-by", "U123",
+                "--source-channel", "C999",
+                "--source-thread", "1.2",
+            ])
+
+        api.assert_not_called()
+        post_duplicate_note.assert_not_called()
+        self.assertIn("正在 PM確認中", output.getvalue())
+        self.assertIn("--force", output.getvalue())
+
+    @patch.object(slack_list, "api")
+    @patch.object(slack_list, "fetch_all", return_value=[])
+    @patch.object(slack_list, "schema")
+    @patch.object(slack_list, "config", return_value=("token", "F123"))
+    def test_add_keeps_created_row_when_origin_note_fails(
+        self, config, schema, fetch_all, api
+    ):
+        schema.return_value = self.add_schema()
+        api.return_value = {"item": {"id": "RecNew"}}
+
+        output = io.StringIO()
+        with patch.object(slack_list, "source_permalink", return_value="https://source"), \
+                patch.object(slack_list, "post_record_note", return_value=False), \
+                redirect_stdout(output):
+            slack_list.cmd_add([
+                "--title", "匯出缺欄位",
+                "--assignee", "U123",
+                "--requested-by", "U123",
+                "--source-channel", "C999",
+                "--source-thread", "1.2",
+            ])
+
+        self.assertIn("待辦已建立", output.getvalue())
+        self.assertIn("來源／回報設定失敗", output.getvalue())
+
+    def test_add_rejects_invalid_date(self):
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as err:
+            slack_list.cmd_add([
+                "--title", "匯出缺欄位",
+                "--due", "明天",
+                "--assignee", "U123",
+                "--requested-by", "U123",
+                "--source-channel", "C999",
+                "--source-thread", "1.2",
+            ])
+        self.assertIn("YYYY-MM-DD", err.getvalue())
+
+    @patch.object(slack_list, "api")
+    @patch.object(slack_list, "fetch_all")
+    @patch.object(slack_list, "item_threads", return_value={"RecA": {"ts": "1.2"}})
+    @patch.object(slack_list, "schema")
+    @patch.object(slack_list, "config", return_value=("token", "F123"))
+    def test_add_from_item_thread_requires_explicit_force(
+        self, config, schema, item_threads, fetch_all, api
+    ):
+        schema.return_value = self.add_schema()
+        output = io.StringIO()
+        with redirect_stdout(output):
+            slack_list.cmd_add([
+                "--title", "另一個匯出問題",
+                "--assignee", "U123",
+                "--requested-by", "U123",
+                "--source-channel", "C123",
+                "--source-thread", "1.2",
+            ])
+
+        fetch_all.assert_not_called()
+        api.assert_not_called()
+        self.assertIn("既有待辦列", output.getvalue())
+        self.assertIn("--force", output.getvalue())
+
+    def test_reporter_resolution_uses_latest_own_setting(self):
+        rec = {"created_by": "UBOT"}
+        messages = [
+            {"user": "UBOT", "bot_id": "B1", "text":
+             "[work-helper:origin:v1 sender=U123]\n"
+             "[work-helper:reporter:v1 user=U123]", "blocks": [
+                 {"block_id": "work_helper_origin_v1_U123"},
+                 {"block_id": "work_helper_reporter_v1_user_U123"},
+             ]},
+            {"user": "U999", "text": "[work-helper:reporter:v1 user=U999]",
+             "blocks": [{"block_id": "work_helper_reporter_v1_user_U999"}]},
+            {"user": "UBOT", "bot_id": "B1", "text":
+             "[work-helper:reporter:v1 user=U456]", "blocks": [
+                 {"block_id": "work_helper_reporter_v1_user_U456"},
+             ]},
+        ]
+
+        self.assertEqual(
+            slack_list.record_reporter(rec, messages, "UBOT"), ("U456", True)
+        )
+
+    def test_reporter_resolution_can_disable_notifications(self):
+        rec = {"created_by": "U123"}
+        messages = [{
+            "user": "UBOT", "bot_id": "B1",
+            "text": "[work-helper:reporter:v1 none]",
+            "blocks": [{"block_id": "work_helper_reporter_v1_none"}],
+        }]
+        self.assertEqual(
+            slack_list.record_reporter(rec, messages, "UBOT"), ("", True)
+        )
+
+    def test_reporter_default_restores_bot_origin(self):
+        rec = {"created_by": "UBOT"}
+        messages = [
+            {"user": "UBOT", "bot_id": "B1", "text":
+             "[work-helper:origin:v1 sender=U123]\n"
+             "[work-helper:reporter:v1 user=U123]", "blocks": [
+                 {"block_id": "work_helper_origin_v1_U123"},
+                 {"block_id": "work_helper_reporter_v1_user_U123"},
+             ]},
+            {"user": "UBOT", "bot_id": "B1", "text":
+             "[work-helper:reporter:v1 user=U456]", "blocks": [
+                 {"block_id": "work_helper_reporter_v1_user_U456"},
+             ]},
+            {"user": "UBOT", "bot_id": "B1", "text":
+             "[work-helper:reporter:v1 default]", "blocks": [
+                 {"block_id": "work_helper_reporter_v1_default"},
+             ]},
+        ]
+        self.assertEqual(
+            slack_list.record_reporter(rec, messages, "UBOT"), ("U123", True)
+        )
+
+    def test_reporter_resolution_falls_back_by_creator_kind(self):
+        self.assertEqual(
+            slack_list.record_reporter({"created_by": "U123"}, [], "UBOT"),
+            ("U123", True),
+        )
+        self.assertEqual(
+            slack_list.record_reporter({"created_by": "UBOT"}, [], "UBOT"),
+            ("", False),
+        )
+
+    def test_reporter_resolution_ignores_marker_text_relayed_by_bot(self):
+        rec = {"created_by": "U123"}
+        messages = [{
+            "user": "UBOT", "bot_id": "B1",
+            "text": "進度：[work-helper:reporter:v1 none]",
+        }]
+        self.assertEqual(
+            slack_list.record_reporter(rec, messages, "UBOT"), ("U123", True)
+        )
+
+    @patch.object(slack_list, "api")
+    @patch.object(slack_list, "item_thread_ts", return_value="1.2")
+    @patch.object(slack_list, "config", return_value=("token", "F123"))
+    def test_reporter_command_posts_canonical_visible_setting(
+        self, config, item_thread_ts, api
+    ):
+        slack_list.cmd_reporter(["RecA", "--user", "U456"])
+
+        method, payload, token = api.call_args.args
+        self.assertEqual(method, "chat.postMessage")
+        self.assertEqual(token, "token")
+        self.assertIn("[work-helper:reporter:v1 user=U456]", payload["text"])
+        self.assertIn("<@U456>", payload["text"])
+        self.assertEqual(
+            payload["blocks"][0]["block_id"],
+            "work_helper_reporter_v1_user_U456",
+        )
+
+    @patch.object(slack_list, "api")
+    @patch.object(slack_list, "bot_user_id", return_value="UBOT")
+    @patch.object(slack_list, "thread_messages", return_value=[])
+    @patch.object(slack_list, "item_thread_ts", return_value="1.2")
+    @patch.object(slack_list, "record")
+    @patch.object(slack_list, "schema")
+    @patch.object(slack_list, "config", return_value=("token", "F123"))
+    def test_ready_quiet_does_not_include_reporter_mention(
+        self, config, schema, record, item_thread_ts, thread_messages,
+        bot_user_id, api
+    ):
+        schema.return_value = {
+            slack_list.COL_TITLE: {"id": "title-col"},
+            slack_list.COL_STATUS: {
+                "id": "status-col",
+                "options": {"choices": [{
+                    "label": slack_list.STATUS_READY,
+                    "value": "ready-opt",
+                }]},
+            },
+            slack_list.COL_FILE: {"id": "file-col"},
+        }
+        record.return_value = {
+            "created_by": "U123",
+            "fields": [{"column_id": "title-col", "text": "庫存修正"}],
+        }
+
+        slack_list.cmd_ready([
+            "RecA", "--changed", "修正匯出欄位",
+            "--verify", "匯出後確認批號存在", "--no-url", "--quiet",
+        ])
+
+        post_payload = api.call_args_list[0].args[1]
+        self.assertNotIn("<@U123>", json.dumps(post_payload, ensure_ascii=False))
+
+    @patch.object(slack_list.urllib.request, "urlopen")
+    def test_create_transport_failure_warns_not_to_retry(self, urlopen):
+        urlopen.side_effect = slack_list.urllib.error.URLError("timeout")
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as err:
+            slack_list.api("slackLists.items.create", {"list_id": "F123"}, "token")
+        self.assertIn("建立結果不明", err.getvalue())
+        self.assertIn("勿直接重試", err.getvalue())
+
+    @patch.object(slack_list.urllib.request, "urlopen")
+    def test_create_truncated_response_warns_not_to_retry(self, urlopen):
+        urlopen.return_value.__enter__.return_value.read.return_value = b"{"
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as err:
+            slack_list.api("slackLists.items.create", {"list_id": "F123"}, "token")
+        self.assertIn("建立結果不明", err.getvalue())
+        self.assertIn("勿直接重試", err.getvalue())
+
+    @patch.object(slack_list.urllib.request, "urlopen")
+    def test_api_get_truncated_response_fails_cleanly(self, urlopen):
+        urlopen.return_value.__enter__.return_value.read.return_value = b"{"
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as err:
+            slack_list.api_get("conversations.history", {"channel": "C123"}, "token")
+        self.assertIn("Slack 回應無法讀取", err.getvalue())
+
+    @patch.object(slack_list, "item_threads", side_effect=SystemExit)
+    def test_post_note_turns_thread_lookup_failure_into_partial_success(self, item_threads):
+        self.assertFalse(slack_list.post_note_with_retry(
+            "token", "F123", "RecA", "來源註記"
+        ))
 
     def test_github_issue_urls_include_fingerprint_and_title(self):
         search, create = slack_list.github_issue_urls(

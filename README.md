@@ -4,7 +4,7 @@
 **離職就用不到的東西放這裡** —— 跨工作還要用的環境設定在 `dotfiles`，純文件在 `work-docs`。
 
 ```
-bin/slack-list          讀「Bug/需求總表」，並把處理進度回報到 Slack
+bin/slack-list          讀寫「Bug/需求總表」，並把處理進度回報到 Slack
 bin/sync-skills         把 skills/ 全部拉線到 agent 讀得到的位置（新增 skill 後跑一次）
 skills/slack-todo/      ↑ 的 skill：讓 agent 知道有這個東西、什麼時候用
 skills/daily-worklog/   從 git commit 產工作日誌（產出寫進 work-docs）
@@ -83,10 +83,48 @@ bin/slack-list context --channel C0B9… --thread-ts 1234567890.123456
 `SLACK_MY_USER_ID` 解釋「我」。OpenAB收到 Slack訊息時已知道當次 `sender_id`，要用
 `assigned <sender_id>`；不要把共享環境裡的固定 ID當成目前說話的人。
 
+## 建立待辦與設定回報
+
+`add` 一次寫入名稱、指派對象及選填的敘述／到期日。同名未完成列已存在時不建第二列，
+而是把 assignee 追加到既有列，並在原生 item 留言串留下再次回報的來源。
+
+```bash
+bin/slack-list add \
+  --title "庫存匯出缺少批號" \
+  --description "匯出的 Excel 沒有批號欄" \
+  --due 2026-08-21 \
+  --assignee U0B… \
+  --requested-by U0B… \
+  --source-channel C0B… \
+  --source-thread 1234567890.123456
+
+# 明確改成回報給另一個人，或取消／恢復預設
+bin/slack-list reporter Rec0B… --user U0B…
+bin/slack-list reporter Rec0B… --none
+bin/slack-list reporter Rec0B… --default
+```
+
+`add` 是 single-writer command，只由單一 OpenAB backlog agent執行；local implementation agent不跑，
+避免兩個不共享lock的runtime同時查重後各自建列。`--requested-by`必填，`--assignee`必須和它相同，
+也就是只建立給當次sender。省略`--report-to`時回報對象預設是`--requested-by`，也可以明確帶
+`--report-to U…`或`--no-reporter`。相對日期先按`Asia/Taipei`換成`YYYY-MM-DD`再傳入。
+
+查重只比對正規化後完全同名、尚未完成且未封存的列。既有列已在「PM確認中」時只回連結，
+不追加 assignee；確認是復發或另一件事後，才用 `--force` 另建。從既有 item 留言串呼叫時
+也必須先向使用者確認，再帶 `--force`。
+
+命中既有列時不改原本的回報對象，即使 `add` 帶了 `--report-to` / `--no-reporter`；確定要改時
+再跑 `reporter`。若 `add` 回「建立結果不明」，Slack可能已收下request，先到List搜尋同名列，
+不要直接重跑。
+
+List 沒有「回報對象」欄。工具把回報設定寫成 item 留言串裡可見、帶結構化block ID的bot訊息，
+最新一則生效；任意留言或由bot轉貼的marker文字都不算設定。完整理由見
+[ADR 0010](docs/adr/0010-store-reporter-settings-in-item-threads.md)。
+
 ## 回報進度
 
 回報寫進**該列原生的 item 留言串** —— PM 本來就在那裡講話。
-Slack 在建列時就替每一列開好串了，這支工具只查不建（推導方式與取捨見
+Slack 在建列時就替每一列開好串了，這支工具只查既有串、不另建串（推導方式與取捨見
 [ADR 0001](docs/adr/0001-report-into-the-native-item-comment-thread.md)）。
 
 ```bash
@@ -121,8 +159,9 @@ branch。發出去之前它會 HEAD 一下，連不到就中止（分支預覽�
 
 `--quiet` 不 `@` 人，批次補狀態時用。
 
-`@` 的是**回報對象**，也就是把這一列寫上表的人（`created_by`）——
-不是「指派對象」，那欄是負責做的人，通常就是你自己。
+`@` 的是**回報對象**，不是「指派對象」。明確的 `reporter` 設定優先；沒有設定時，
+真人建立的列用 `created_by`，bot 代建的列用來源註記裡的發起者。兩者都找不到時不 `@` 人，
+不會拿目前 assignee 來猜。
 
 讀回覆 —— PM 回的東西都在這裡：
 

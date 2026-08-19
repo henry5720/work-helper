@@ -5,9 +5,11 @@
 設定放在 repo 根目錄的 .env（見 .env.example）。
 
 回報的形狀：寫進該列**原生的 item 留言串** —— PM 本來就在那裡講話。
-Slack 在建列時就替每一列開好了串，這支工具只查不建（推導方式見 docs/adr/0001）。
+Slack 在建列時就替每一列開好了串，這支工具只查既有串、不另建串（推導方式見 docs/adr/0001）。
+  add       建立指派給自己的待辦列；同名列存在時加入既有指派
+  reporter  設定該列驗收時要通知誰
   progress  只回在串裡，不 @ 人、不改狀態 —— 中間進度，不吵人
-  ready     @ 回報對象（把這列寫上表的人），並把狀態改成「PM確認中」
+  ready     @ 回報對象，並把狀態改成「PM確認中」
 
 「改狀態」跟「發通知」綁在同一支指令裡，不是兩件事。
 拆開的話遲早會漏一次，而漏掉的症狀是表上寫 PM確認中 但沒人被通知，沒有任何徵兆。
@@ -16,13 +18,17 @@ Slack 在建列時就替每一列開好了串，這支工具只查不建（推�
 """
 
 import argparse
+import fcntl
+import http.client
 import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -34,11 +40,20 @@ API = "https://slack.com/api/"
 # 「連結」欄不在這裡 —— 那格是 PM 放外部參考資料的地方（Google Docs、Figma…），
 # 這支工具不寫它。
 COL_TITLE = "名稱"
+COL_DESCRIPTION = "敘述"
+COL_ASSIGNEE = "指派對象"
+COL_DUE = "到期日"
+COL_COMPLETED = "已完成"
 COL_STATUS = "狀態"
 COL_FILE = "檔案"
 
 # ready 會把狀態設成這個。表上本來就在用，語意是「球在 PM 身上」。
 STATUS_READY = "PM確認中"
+
+ORIGIN_BLOCK = re.compile(r"work_helper_origin_v1_(U[A-Z0-9]+)")
+REPORTER_BLOCK = re.compile(
+    r"work_helper_reporter_v1_(user_(U[A-Z0-9]+)|none|default)"
+)
 
 # Slack List 的每一格會用這些鍵之一放值，看欄位型別而定
 VALUE_KEYS = [
@@ -52,7 +67,7 @@ ERROR_HINTS = {
     "list_not_found": "找不到這張 List。要嘛 SLACK_LIST_ID 錯了，要嘛這張表還沒分享給你的 app。",
     "invalid_auth": "token 無效。確認 .env 裡是 xoxb- 開頭那串，而且 app 已經 Install to Workspace。",
     "not_authed": "沒帶到 token。檢查 .env 有沒有被讀到（跑 `bin/slack-list env`）。",
-    "missing_scope": "app 少了 lists:read。加完 scope 要重新 Install to Workspace，token 會換一組新的。",
+    "missing_scope": "app 少了這個動作需要的 scope（讀取常見 lists:read，寫入常見 lists:write / chat:write）。加完要重新 Install to Workspace，token 會換一組新的。",
     "ratelimited": "被限流了（Tier 2，每分鐘 20+ 次），等一下再跑。",
 }
 
@@ -117,9 +132,17 @@ def api(method, payload, token):
         with urllib.request.urlopen(req, timeout=30) as r:
             body = json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
+        if method == "slackLists.items.create":
+            die(f"建立結果不明（HTTP {e.code}）；先到 List 搜尋同名列，勿直接重試")
         die(f"HTTP {e.code}：{e.read().decode('utf-8', 'replace')[:500]}")
     except urllib.error.URLError as e:
+        if method == "slackLists.items.create":
+            die(f"建立結果不明（{e.reason}）；先到 List 搜尋同名列，勿直接重試")
         die(f"連不上 Slack：{e.reason}")
+    except (OSError, http.client.HTTPException, UnicodeError, json.JSONDecodeError) as e:
+        if method == "slackLists.items.create":
+            die(f"建立結果不明（回應中斷：{e}）；先到 List 搜尋同名列，勿直接重試")
+        die(f"Slack 回應無法讀取：{e}")
 
     # Slack 失敗時 HTTP 仍然回 200，錯誤藏在 body.ok
     if not body.get("ok"):
@@ -128,6 +151,9 @@ def api(method, payload, token):
         if err in ERROR_HINTS:
             print(f"  → {ERROR_HINTS[err]}", file=sys.stderr)
         print(json.dumps(body, ensure_ascii=False, indent=2), file=sys.stderr)
+        if (method == "slackLists.items.create"
+                and err in ("internal_error", "fatal_error", "service_unavailable")):
+            die("建立結果不明；先到 List 搜尋同名列，勿直接重試")
         sys.exit(1)
     return body
 
@@ -146,6 +172,8 @@ def api_get(method, params, token):
         die(f"HTTP {e.code}：{e.read().decode('utf-8', 'replace')[:500]}")
     except urllib.error.URLError as e:
         die(f"連不上 Slack：{e.reason}")
+    except (OSError, http.client.HTTPException, UnicodeError, json.JSONDecodeError) as e:
+        die(f"Slack 回應無法讀取（{method}）：{e}")
     if not body.get("ok"):
         err = body.get("error", "unknown")
         print(f"Slack 回 ok:false（{method}），error = {err}", file=sys.stderr)
@@ -208,12 +236,12 @@ def flatten(item):
 
 # --- 回報用：查表 ---
 
-def schema(token, list_id):
+def schema(token, list_id, required=(COL_TITLE, COL_STATUS, COL_FILE)):
     """欄位定義。slackLists.info 不存在，schema 藏在 files.info 的 list_metadata 裡。"""
     body = api_get("files.info", {"file": list_id}, token)
     cols = ((body.get("file") or {}).get("list_metadata") or {}).get("schema") or []
     by_name = {c.get("name"): c for c in cols}
-    for need in (COL_TITLE, COL_STATUS, COL_FILE):
+    for need in required:
         if need not in by_name:
             die(f"這張表沒有「{need}」欄。有的是：{'、'.join(n for n in by_name if n)}")
     return by_name
@@ -249,10 +277,33 @@ def record_title(rec, cols):
     return (cell(rec, cols[COL_TITLE]["id"]).get("text") or "").strip() or "(無標題)"
 
 
-def record_reporter(rec):
-    """該 @ 的人＝把這一列寫上表的人，不是「指派對象」（那是你自己）。
-    Slack 給的 created_by 逐列準確，不用另外維護一份「模組 → 誰驗收」對照表。"""
-    return rec.get("created_by") or ""
+def record_reporter(rec, messages, bot_uid):
+    """回傳 (user_id, 設定是否完整)；絕不從 assignee 猜回報對象。"""
+    origin = ""
+    setting = None
+    for msg in messages:
+        if not msg.get("bot_id") or msg.get("user") != bot_uid:
+            continue
+        for block in msg.get("blocks") or []:
+            block_id = block.get("block_id") or ""
+            found_origin = ORIGIN_BLOCK.fullmatch(block_id)
+            if found_origin:
+                origin = found_origin.group(1)
+            found_setting = REPORTER_BLOCK.fullmatch(block_id)
+            if found_setting:
+                setting = found_setting.group(1)
+
+    if setting and setting.startswith("user_"):
+        return setting.removeprefix("user_"), True
+    if setting == "none":
+        return "", True
+
+    creator = rec.get("created_by") or ""
+    if creator and creator != bot_uid:
+        return creator, True
+    if origin:
+        return origin, True
+    return "", False
 
 
 def deep_link(list_id, record_id):
@@ -328,6 +379,155 @@ def titles(items):
 
 def bot_user_id(token):
     return api_get("auth.test", {}, token).get("user_id", "")
+
+
+def check_user_id(uid, option):
+    if not re.fullmatch(r"U[A-Z0-9]+", uid or ""):
+        die(f"{option} 要是 U 開頭的 Slack user ID，例如 U0B54FKJ93R")
+
+
+def check_date(value):
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        die("--due 要是 YYYY-MM-DD，例如 2026-08-21（相對日期以 Asia/Taipei 換算）")
+    if parsed.strftime("%Y-%m-%d") != value:
+        die("--due 要是有效的 YYYY-MM-DD 日期")
+
+
+def rich_text(value):
+    return [{
+        "type": "rich_text",
+        "elements": [{
+            "type": "rich_text_section",
+            "elements": [{"type": "text", "text": value}],
+        }],
+    }]
+
+
+def normalized_title(value):
+    return " ".join(value.split()).casefold()
+
+
+@contextmanager
+def add_lock(list_id):
+    """Serialize read-then-write add operations in one runtime."""
+    safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", list_id)
+    with Path(f"/tmp/work-helper-slack-list-add-{safe_id}.lock").open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def checkbox_value(field):
+    value = field.get("checkbox", False)
+    if isinstance(value, list):
+        return bool(value and value[0])
+    return bool(value)
+
+
+def source_permalink(token, channel, thread_ts):
+    if not channel and not thread_ts:
+        return None
+    if not channel or not thread_ts:
+        die("--source-channel 和 --source-thread 必須一起提供")
+    link = api_get("chat.getPermalink", {
+        "channel": channel,
+        "message_ts": thread_ts,
+    }, token).get("permalink") or ""
+    if not link:
+        die("Slack 沒有傳回來源對話 permalink；未建立待辦，避免留下無來源的列")
+    return link
+
+
+def section_block(block_id, text):
+    return {
+        "type": "section",
+        "block_id": block_id,
+        "text": {"type": "mrkdwn", "text": text},
+    }
+
+
+def reporter_blocks(mode, user_id="", requester="", source=""):
+    blocks = []
+    if requester:
+        blocks.append(section_block(
+            f"work_helper_origin_v1_{requester}",
+            f"由 <@{requester}> 透過 bot 建立。",
+        ))
+    if mode == "user":
+        blocks.append(section_block(
+            f"work_helper_reporter_v1_user_{user_id}",
+            f"回報對象 → <@{user_id}>",
+        ))
+    elif mode == "default":
+        blocks.append(section_block(
+            "work_helper_reporter_v1_default",
+            "回報對象 → 恢復預設",
+        ))
+    else:
+        blocks.append(section_block(
+            "work_helper_reporter_v1_none",
+            "回報對象 → 不指定",
+        ))
+    if source:
+        blocks.append(section_block("work_helper_source_v1", f"來源對話：{source}"))
+    return blocks
+
+
+def post_note_with_retry(token, list_id, record_id, text, blocks=None):
+    """新列的原生 thread 可能稍晚出現；找不到時短暫重試，不刪已建立的列。"""
+    for attempt in range(3):
+        try:
+            parent = item_threads(token, list_id).get(record_id)
+            if parent:
+                payload = {
+                    "channel": comment_channel(list_id),
+                    "thread_ts": parent["ts"],
+                    "text": text,
+                }
+                if blocks:
+                    payload["blocks"] = blocks
+                api("chat.postMessage", payload, token)
+                return True
+        except SystemExit:
+            return False
+        if attempt < 2:
+            time.sleep(1)
+    return False
+
+
+def post_record_note(token, list_id, record_id, requester, reporter, source):
+    lines = []
+    if requester:
+        lines.extend([
+            f"[work-helper:origin:v1 sender={requester}]",
+            f"由 <@{requester}> 透過 bot 建立。",
+        ])
+    if reporter:
+        lines.extend([
+            f"[work-helper:reporter:v1 user={reporter}]",
+            f"回報對象 → <@{reporter}>",
+        ])
+    else:
+        lines.extend([
+            "[work-helper:reporter:v1 none]",
+            "回報對象 → 不指定",
+        ])
+    if source:
+        lines.append(f"來源對話：{source}")
+    mode = "user" if reporter else "none"
+    blocks = reporter_blocks(mode, reporter or "", requester or "", source or "")
+    return post_note_with_retry(token, list_id, record_id, "\n".join(lines), blocks)
+
+
+def post_duplicate_note(token, list_id, record_id, sender, source):
+    lines = [f"<@{sender}> 再次回報同一件事；既有待辦已指派給他。"]
+    if source:
+        lines.append(f"來源對話：{source}")
+    return post_note_with_retry(token, list_id, record_id, "\n".join(lines))
 
 
 def upload_md(token, channel, thread_ts, path):
@@ -444,6 +644,192 @@ def cmd_assigned(argv):
     ap.add_argument("keyword", nargs="?", default="", help="可選，過濾整列文字")
     args = ap.parse_args(argv)
     print_assigned(args.user_id, args.keyword)
+
+
+def active_duplicate(rows, title, cols):
+    wanted = normalized_title(title)
+    matches = []
+    for row in rows:
+        if row.get("archived"):
+            continue
+        if checkbox_value(cell(row, cols[COL_COMPLETED]["id"])):
+            continue
+        if normalized_title(record_title(row, cols)) == wanted:
+            matches.append(row)
+    if len(matches) > 1:
+        ids = "、".join(r.get("id", "?") for r in matches)
+        die(f"找到多筆同名且未完成的待辦列（{ids}），先人工合併，工具不會猜該更新哪一筆")
+    return matches[0] if matches else None
+
+
+def add_or_merge(args, token, list_id, cols, title, source):
+    rows = fetch_all()
+    duplicate = None if args.force else active_duplicate(rows, title, cols)
+    if duplicate:
+        record_id = duplicate["id"]
+        ready_opt = select_value(cols, COL_STATUS, STATUS_READY)
+        statuses = cell(duplicate, cols[COL_STATUS]["id"]).get("select") or []
+        if ready_opt in statuses:
+            print(f"已有同名待辦正在 {STATUS_READY}，未變更指派：")
+            print(deep_link(list_id, record_id))
+            if args.report_to or args.no_reporter:
+                print("既有列的回報對象也未變更；確認後請另用 reporter 指令設定。")
+            print("若這是復發或另一件事，確認後加 --force 重新執行。")
+            return
+
+        assignee_cell = cell(duplicate, cols[COL_ASSIGNEE]["id"])
+        assignees = list(assignee_cell.get("user") or [])
+        if args.assignee not in assignees:
+            assignees.append(args.assignee)
+            api("slackLists.items.update", {
+                "list_id": list_id,
+                "id": record_id,
+                "cells": [{
+                    "row_id": record_id,
+                    "column_id": cols[COL_ASSIGNEE]["id"],
+                    "user": assignees,
+                }],
+            }, token)
+            result = "已加入既有待辦"
+        else:
+            result = "既有待辦已指派給你"
+        noted = post_duplicate_note(
+            token, list_id, record_id, args.assignee, source)
+        print(f"{result}：{title}")
+        if args.report_to or args.no_reporter:
+            print("命中既有列，未變更原回報對象；要修改請另用 reporter 指令。")
+        if not noted:
+            print("待辦指派已更新，但再次回報的來源註記失敗。")
+        print(deep_link(list_id, record_id))
+        return
+
+    initial_fields = [
+        {"column_id": cols[COL_TITLE]["id"], "rich_text": rich_text(title)},
+        {"column_id": cols[COL_ASSIGNEE]["id"], "user": [args.assignee]},
+    ]
+    if args.description:
+        initial_fields.append({
+            "column_id": cols[COL_DESCRIPTION]["id"],
+            "rich_text": rich_text(args.description.strip()),
+        })
+    if args.due:
+        initial_fields.append({
+            "column_id": cols[COL_DUE]["id"],
+            "date": [args.due],
+        })
+
+    body = api("slackLists.items.create", {
+        "list_id": list_id,
+        "initial_fields": initial_fields,
+    }, token)
+    created = body.get("item") or body.get("record") or {}
+    record_id = created.get("id") or ""
+    if not record_id:
+        die("Slack 回報建立成功，但沒有傳回 record ID；先到 List 確認，勿直接重試")
+
+    reporter = "" if args.no_reporter else (args.report_to or args.requested_by)
+    noted = post_record_note(
+        token, list_id, record_id, args.requested_by, reporter, source)
+    print(f"已新增：{title}")
+    if args.due:
+        print(f"到期日：{args.due}")
+    if not noted:
+        print("待辦已建立，但來源／回報設定失敗；這列之後不會猜回報對象。")
+    print(deep_link(list_id, record_id))
+
+
+def cmd_add(argv):
+    """建立 self-assigned 待辦；精確同名時加入既有列。"""
+    ap = argparse.ArgumentParser(
+        prog="slack-list add",
+        description="建立待辦並指派給當次使用者；同名未完成待辦存在時加入既有指派。")
+    ap.add_argument("--title", required=True, help="待辦名稱；不會自行補模組前綴")
+    ap.add_argument("--description", help="敘述（可選）")
+    ap.add_argument("--due", help="到期日，YYYY-MM-DD（Asia/Taipei）")
+    ap.add_argument("--assignee", required=True, metavar="SLACK_USER_ID",
+                    help="要加入指派的 Slack user ID")
+    ap.add_argument("--requested-by", required=True, metavar="SLACK_USER_ID",
+                    help="OpenAB sender ID；必須和 --assignee 相同")
+    report = ap.add_mutually_exclusive_group()
+    report.add_argument("--report-to", metavar="SLACK_USER_ID",
+                        help="回報對象；省略時預設 requested-by")
+    report.add_argument("--no-reporter", action="store_true",
+                        help="明確不指定回報對象")
+    ap.add_argument("--source-channel", required=True,
+                    help="OpenAB sender context 的 channel_id")
+    ap.add_argument("--source-thread", required=True,
+                    help="OpenAB sender context 的 thread_id")
+    ap.add_argument("--force", action="store_true",
+                    help="使用者已確認這是另一件事；略過同名合併與 item thread 防護")
+    args = ap.parse_args(argv)
+
+    title = args.title.strip()
+    if not title:
+        die("--title 不能是空白")
+    if args.due:
+        check_date(args.due)
+    check_user_id(args.assignee, "--assignee")
+    check_user_id(args.requested_by, "--requested-by")
+    if args.requested_by != args.assignee:
+        die("共享 agent 只能把新待辦指派給當次 sender；--assignee 必須等於 --requested-by")
+    if args.report_to:
+        check_user_id(args.report_to, "--report-to")
+    token, list_id = config()
+    cols = schema(token, list_id, required=(
+        COL_TITLE, COL_DESCRIPTION, COL_ASSIGNEE, COL_DUE, COL_COMPLETED, COL_STATUS,
+    ))
+
+    if (args.source_channel == comment_channel(list_id) and not args.force):
+        source_row = next((rid for rid, parent in item_threads(token, list_id).items()
+                           if parent.get("ts") == args.source_thread), None)
+        if source_row:
+            print("目前在既有待辦列的 item 留言串；先確認準備新增的是另一件事：")
+            print(deep_link(list_id, source_row))
+            print(f"準備新增：{title}")
+            print("確認後用同一組參數加 --force。")
+            return
+
+    source = source_permalink(token, args.source_channel, args.source_thread)
+    with add_lock(list_id):
+        add_or_merge(args, token, list_id, cols, title, source)
+
+
+def reporter_message(mode, user_id=""):
+    if mode == "user":
+        return (f"[work-helper:reporter:v1 user={user_id}]\n"
+                f"回報對象 → <@{user_id}>")
+    if mode == "default":
+        return "[work-helper:reporter:v1 default]\n回報對象 → 恢復預設"
+    return "[work-helper:reporter:v1 none]\n回報對象 → 不指定"
+
+
+def cmd_reporter(argv):
+    """在 item 留言串留下可見、可解析的回報設定。"""
+    ap = argparse.ArgumentParser(
+        prog="slack-list reporter",
+        description="設定一列驗收時要通知的人；最新一則設定生效。")
+    ap.add_argument("record_id", help="表上那一列的 ID（Rec… 開頭）")
+    choice = ap.add_mutually_exclusive_group(required=True)
+    choice.add_argument("--user", metavar="SLACK_USER_ID", help="指定一位回報對象")
+    choice.add_argument("--default", action="store_true",
+                        help="恢復預設：真人建立者或 bot 建列發起者")
+    choice.add_argument("--none", action="store_true", help="明確不通知任何人")
+    args = ap.parse_args(argv)
+    if args.user:
+        check_user_id(args.user, "--user")
+
+    token, list_id = config()
+    ts = item_thread_ts(token, list_id, args.record_id)
+    mode = "user" if args.user else ("default" if args.default else "none")
+    api("chat.postMessage", {
+        "channel": comment_channel(list_id),
+        "thread_ts": ts,
+        "text": reporter_message(mode, args.user or ""),
+        "blocks": reporter_blocks(mode, args.user or ""),
+    }, token)
+    label = f"<@{args.user}>" if args.user else ("預設" if args.default else "不指定")
+    print(f"回報對象 → {label}")
+    print(deep_link(list_id, args.record_id))
 
 
 def cmd_progress(argv):
@@ -694,10 +1080,11 @@ def cmd_ready(argv):
     link = deep_link(list_id, args.record_id)
     ts = item_thread_ts(token, list_id, args.record_id)
 
-    who = record_reporter(rec)
-    mention = f"<@{who}>" if who else ""
-    if not who and not args.quiet:
-        print(f"提醒：「{title}」查不到建立者，這則不會 @ 到任何人。", file=sys.stderr)
+    messages = thread_messages(token, channel, ts)
+    who, reporter_known = record_reporter(rec, messages, bot_user_id(token))
+    mention = f"<@{who}>" if who and not args.quiet else ""
+    if not reporter_known and not args.quiet:
+        print(f"提醒：「{title}」查不到可靠的回報對象，這則不會 @ 到任何人。", file=sys.stderr)
 
     head = (f"{mention} 可以驗收了 → <{link}|{title}>" if mention
             else f"可以驗收了 → <{link}|{title}>")
@@ -775,6 +1162,8 @@ ARG_READ_COMMANDS = {
 }
 
 WRITE_COMMANDS = {
+    "add": (cmd_add, "建立 self-assigned 待辦；同名未完成列存在時加入既有指派"),
+    "reporter": (cmd_reporter, "設定、恢復或取消一列的回報對象"),
     "progress": (cmd_progress, "回一句進度到該列的 item 留言串，不吵人"),
     "draft": (cmd_draft, "交付 issue 草稿附件與人工發布連結，不改狀態"),
     "ready": (cmd_ready, f"通知可以驗收 + 狀態改成「{STATUS_READY}」"),
@@ -788,7 +1177,7 @@ def usage():
         print(f"  {k:<9} {desc}")
     for k, (_, desc) in ARG_READ_COMMANDS.items():
         print(f"  {k:<9} {desc}")
-    print("\n回報到 Slack（詳細參數看 `slack-list <指令> --help`）：")
+    print("\n寫入 Slack（詳細參數看 `slack-list <指令> --help`）：")
     for k, (_, desc) in WRITE_COMMANDS.items():
         print(f"  {k:<9} {desc}")
 
