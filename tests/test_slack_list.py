@@ -4,10 +4,11 @@ import io
 import json
 import os
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "bin" / "slack-list"
@@ -534,7 +535,7 @@ class SlackListTest(unittest.TestCase):
 
     @patch.object(slack_list.urllib.request, "urlopen")
     def test_check_url_rejects_error_status(self, urlopen):
-        # 分支預覽還沒部署好時 Cloudflare 回 403，不是 404 —— 所以判的是 >= 400
+        # HEAD 跟 GET 都 4xx 才算死的。只有 HEAD 被擋的情況見下一個測試。
         urlopen.side_effect = slack_list.urllib.error.HTTPError(
             "https://gone.pages.dev", 403, "Forbidden", {}, None)
         with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as err:
@@ -546,6 +547,123 @@ class SlackListTest(unittest.TestCase):
     def test_check_url_passes_on_200(self, urlopen):
         urlopen.return_value.__enter__.return_value.status = 200
         slack_list.check_url("https://fix-spc-update.teamsync-frontend.pages.dev")
+
+    @patch.object(slack_list.urllib.request, "urlopen")
+    def test_check_url_does_not_send_the_blocked_default_user_agent(self, urlopen):
+        # urllib 預設送 Python-urllib/3.x，Cloudflare 的 bot 規則直接回 403，
+        # 而分支預覽就掛在 Cloudflare Pages 上 —— 活著的網址會被判成死的。
+        urlopen.return_value.__enter__.return_value.status = 200
+        slack_list.check_url("https://fix-spc-update.teamsync-frontend.pages.dev")
+        request = urlopen.call_args.args[0]
+        self.assertNotIn("Python-urllib", request.get_header("User-agent"))
+
+    @patch.object(slack_list.urllib.request, "urlopen")
+    def test_check_url_retries_with_get_when_head_is_rejected(self, urlopen):
+        def answer(request, timeout=None):
+            if request.method == "HEAD":
+                raise slack_list.urllib.error.HTTPError(
+                    request.full_url, 403, "Forbidden", {}, None)
+            response = MagicMock()
+            response.__enter__.return_value.status = 200
+            return response
+
+        urlopen.side_effect = answer
+        slack_list.check_url("https://fix-spc-update.teamsync-frontend.pages.dev")
+        self.assertEqual(
+            [c.args[0].method for c in urlopen.call_args_list], ["HEAD", "GET"])
+
+    def write_report(self, body):
+        path = Path(self.tmp.name) / "report.md"
+        path.write_text(body, encoding="utf-8")
+        return str(path)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    FULL_REPORT = (
+        "# V01 庫存異常狀態顯示 — 驗收說明\n\n"
+        "測試網址：https://fix-inventory.teamsync-frontend.pages.dev\n\n"
+        "## 改了什麼\n\n- 判定基準改成可用數\n\n"
+        "## 怎麼驗收\n\n1. 開庫存列表看 PMV 低庫存示範品\n\n"
+        "## QA case（✅ = 程式自動測試已覆蓋）\n\n"
+        "| 情境 | 自動測試 |\n|---|---|\n| 可用數低於門檻就是低庫存 | ✅ |\n"
+    )
+
+    def test_report_body_requires_every_fixed_section(self):
+        path = self.write_report("## 改了什麼\n\n- a\n\n## 怎麼驗收\n\n1. b\n")
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as err:
+            slack_list.report_body(path)
+        self.assertIn("## QA case", err.getvalue())
+
+    def test_report_body_rejects_manual_mark_without_a_reason(self):
+        # ⬜ 沒寫原因，PM 分不出那是漏測還是刻意不測
+        path = self.write_report(
+            self.FULL_REPORT + "| 列表四種顏色 | ⬜ |\n")
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as err:
+            slack_list.report_body(path)
+        self.assertIn("⬜", err.getvalue())
+
+    def test_report_body_accepts_manual_mark_with_a_reason(self):
+        path = self.write_report(
+            self.FULL_REPORT + "| 列表四種顏色 | ⬜ 純顏色，要人工看 |\n")
+        self.assertIn("⬜ 純顏色，要人工看", slack_list.report_body(path))
+
+    def test_report_body_drops_title_and_url_already_in_the_message(self):
+        body = slack_list.report_body(self.write_report(self.FULL_REPORT))
+        self.assertTrue(body.startswith("## 改了什麼"))
+        self.assertNotIn("測試網址", body)
+        self.assertNotIn("驗收說明", body)
+
+    def test_report_body_warns_when_its_url_differs_from_the_flag(self):
+        path = self.write_report(self.FULL_REPORT)
+        with redirect_stderr(io.StringIO()) as err:
+            slack_list.report_body(path, "https://other.teamsync-frontend.pages.dev")
+        self.assertIn("測試網址", err.getvalue())
+
+    @patch.object(slack_list, "api")
+    @patch.object(slack_list, "bot_user_id", return_value="UBOT")
+    @patch.object(slack_list, "thread_messages", return_value=[])
+    @patch.object(slack_list, "item_thread_ts", return_value="1.2")
+    @patch.object(slack_list, "record")
+    @patch.object(slack_list, "schema")
+    @patch.object(slack_list, "config", return_value=("token", "F123"))
+    @patch.object(slack_list, "check_url")
+    def test_ready_report_goes_out_as_one_markdown_block(
+        self, check_url, config, schema, record, item_thread_ts,
+        thread_messages, bot_user_id, api
+    ):
+        schema.return_value = self.add_schema() | {
+            slack_list.COL_FILE: {"id": "file-col"}}
+        record.return_value = {
+            "created_by": "U123",
+            "fields": [{"column_id": "title-col", "text": "庫存異常狀態顯示"}],
+        }
+
+        slack_list.cmd_ready([
+            "RecA", "--report", self.write_report(self.FULL_REPORT),
+            "--url", "https://fix-inventory.teamsync-frontend.pages.dev",
+        ])
+
+        blocks = api.call_args_list[0].args[1]["blocks"]
+        # section 的 mrkdwn 不吃 pipe table，QA case 那張表得靠 markdown block
+        markdown = [b for b in blocks if b["type"] == "markdown"]
+        self.assertEqual(len(markdown), 1)
+        self.assertIn("| 情境 | 自動測試 |", markdown[0]["text"])
+        self.assertIn("<@U123>", blocks[0]["text"]["text"])
+
+    def test_ready_refuses_report_and_flags_together(self):
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as err:
+            slack_list.cmd_ready([
+                "RecA", "--report", self.write_report(self.FULL_REPORT),
+                "--changed", "改了東西", "--no-url",
+            ])
+        self.assertIn("--changed", err.getvalue())
+
+    def test_ready_refuses_when_neither_report_nor_flags_given(self):
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as err:
+            slack_list.cmd_ready(["RecA", "--no-url"])
+        self.assertIn("--report", err.getvalue())
 
 
 if __name__ == "__main__":

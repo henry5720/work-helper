@@ -133,11 +133,13 @@ bin/slack-list progress Rec0B… "後端改完，佈建零失敗行"
 
 # 可以驗收了：@ 回報對象 + 狀態改成「PM確認中」
 bin/slack-list ready Rec0B… \
-  --url     https://fix-spc-update.teamsync-frontend.pages.dev \
+  --url    https://fix-spc-update.teamsync-frontend.pages.dev \
+  --report drafts/2026-08-19/reports/report-1786-stock-status.md
+
+# 沒有畫面可看的單（後端、純文件）：沒有 QA table 可寫，用 flag
+bin/slack-list ready Rec0B… --no-url \
   --changed "生產單建立時就佔料，完工才落帳" \
-  --verify  "建一張生產單，確認投入明細出現" \
-  --verify  "帳頁按確認完工，確認成品進來" \
-  --md 驗收說明.md      # 可選，複雜時才附
+  --verify  "建一張生產單，確認投入明細出現"
 
 # 沒有 GitHub credential 時，把完整 issue 草稿交回原生 item 留言串
 bin/slack-list draft Rec0B… \
@@ -147,15 +149,25 @@ bin/slack-list draft Rec0B… \
   --requested-by U0B…
 ```
 
-`--changed` 跟至少一個 `--verify` 是必填，兩者都可以重複給。訊息本身不交代這兩件事的話，
-PM 收到的就只是一句「可以驗收了」，然後他會回頭問你。
+`--report` 是一份 md，整份當訊息本體發出去，模板固定四段 —— 改了什麼／⚠️ 要先知道的（有才寫）
+／怎麼驗收／QA case。範本是 `skills/slack-todo/report-template.md`，缺段就不准發。
+表格靠 Slack 的 `markdown` block 送，Slack 會在伺服器端把它拆成原生 blocks（`## 標題` 變
+`header`、pipe table 變 `table`），所以 QA case 在 Slack 裡是一張真的表格，不是一堆 `|`。
+上限是一則訊息 12,000 字，破了才改用 `--md` 當附件。
+
+沒有畫面可看的單（後端、純文件）才走 `--changed` + `--verify`，兩個都必填、都可以重複給。
+訊息本身不交代這兩件事的話，PM 收到的就只是一句「可以驗收了」，然後他會回頭問你。
 
 `--url`（測試連結）跟 `--no-url` 也是二選一必填，**沒有預設值是刻意的**：驗收步驟寫得再清楚，
 PM 沒有地方可以照著做還是等於沒寫，而「忘記附連結」不會有任何徵兆。二選一讓忘記變成跑不動。
 前端的分支預覽是 branch 名稱把 `/` 與其他非英數字元換成 `-`，接 `.teamsync-frontend.pages.dev`。
 腳本不自己從 git 推導 —— 它在 `work-helper` 目錄底下跑，`git` 問到的會是 work-helper 自己的
-branch。發出去之前它會 HEAD 一下，連不到就中止（分支預覽還沒部署好時 Cloudflare 回 403，
-不是 404，所以判的是 `>= 400`）。
+branch。發出去之前它會先問一下，連不到就中止（判的是 `>= 400`，不是只判 404 —— 還沒部署好的
+分支預覽在 Cloudflare 上回的是 403）。
+
+⚠️ **這個檢查一定要自報 User-Agent。** urllib 的預設值是 `Python-urllib/3.x`，Cloudflare 的
+bot 規則直接擋掉 —— 實測同一個活著的網址：`Python-urllib/3.12` → 403、`python-requests` → 200。
+而且 HEAD 被擋時要改用 GET 再問一次才算數；只認 405 的話，活著的網址會被判成死的（實際發生過）。
 
 `--quiet` 不 `@` 人，批次補狀態時用。
 
