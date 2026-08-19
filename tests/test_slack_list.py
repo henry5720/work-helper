@@ -74,14 +74,14 @@ class SlackListTest(unittest.TestCase):
         slack_list.cmd_mine(["庫存"])
 
         my_user_id.assert_called_once_with()
-        print_assigned.assert_called_once_with("U123", "庫存", False)
+        print_assigned.assert_called_once_with("U123", "庫存", False, False)
 
     @patch.object(slack_list, "print_assigned")
     @patch.object(slack_list, "my_user_id", return_value="U123")
     def test_mine_reads_all_as_a_flag_not_as_the_keyword(self, my_user_id, print_assigned):
         # 舊版直接拿 sys.argv[2] 當關鍵字，`mine --all 庫存` 會去比對「--all」這個字
         slack_list.cmd_mine(["--all", "庫存"])
-        print_assigned.assert_called_once_with("U123", "庫存", True)
+        print_assigned.assert_called_once_with("U123", "庫存", True, False)
 
     def test_issue_mode_accepts_manual_and_rejects_other_values(self):
         with patch.object(slack_list, "load_env"), patch.dict(
@@ -723,6 +723,79 @@ class SlackListTest(unittest.TestCase):
             slack_list.cmd_json([])
 
         self.assertEqual([r["_id"] for r in json.loads(output.getvalue())], ["RecOpen"])
+
+    def test_one_line_collapses_newlines_and_truncates(self):
+        self.assertEqual(slack_list.one_line("a\nb  c"), "a b c")
+        self.assertEqual(slack_list.one_line("x" * 10, 4), "xxxx…")
+        self.assertEqual(slack_list.one_line("x" * 4, 4), "xxxx")
+
+    @patch.object(slack_list, "text_columns", return_value={slack_list.COL_DESCRIPTION})
+    def test_format_row_truncates_text_columns_only(self, text_columns):
+        assignees = " ".join(["U0B54FKJ93R"] * 12)
+        line = slack_list.format_row({
+            "_id": "RecA",
+            slack_list.COL_DESCRIPTION: "規格\n第二行" + "字" * 300,
+            slack_list.COL_ASSIGNEE: assignees,
+        })
+
+        self.assertTrue(line.startswith("[RecA] "))
+        self.assertIn("規格 第二行", line)   # 換行壓成空格，一列才真的是一行
+        self.assertNotIn("\n", line)
+        self.assertIn("…", line)
+        # user 欄不能截 —— 截一半的 U… 沒辦法拿去 --assignee，也沒辦法用眼睛比對
+        self.assertIn(assignees, line)
+
+    @patch.object(slack_list, "text_columns", return_value={slack_list.COL_DESCRIPTION})
+    def test_format_row_full_keeps_the_original_text(self, text_columns):
+        line = slack_list.format_row(
+            {"_id": "RecA", slack_list.COL_DESCRIPTION: "規格\n第二行"}, full=True)
+        self.assertIn("規格\n第二行", line)
+
+    @patch.object(slack_list, "text_columns", return_value=set())
+    def test_print_rows_columns_filter_keeps_the_record_id(self, text_columns):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            slack_list.print_rows(
+                [{"_id": "RecA", slack_list.COL_TITLE: "甲",
+                  slack_list.COL_DESCRIPTION: "乙"}],
+                columns=[slack_list.COL_TITLE])
+
+        self.assertEqual(output.getvalue().strip(), f"[RecA] {slack_list.COL_TITLE}: 甲")
+
+    def test_resolve_column_rejects_an_unknown_name(self):
+        with self.assertRaises(SystemExit), patch.object(
+            slack_list, "die", side_effect=SystemExit
+        ):
+            slack_list.resolve_column("不存在", [slack_list.COL_TITLE])
+
+    @patch.object(slack_list, "fetch_all", return_value=[])
+    @patch.object(slack_list, "column_index", return_value=({}, {}))
+    @patch.object(slack_list, "config", return_value=("xoxb-token", "F123"))
+    def test_fields_lists_the_choices_of_select_columns(
+        self, config, column_index, fetch_all
+    ):
+        # 不列出選項的話 --where 等於沒用：agent 不知道「狀態」能填什麼，
+        # 只好先撈整張表再自己 grep 統計。
+        cols = {
+            slack_list.COL_STATUS: {
+                "id": "status-col",
+                "type": "select",
+                "options": {"choices": [
+                    {"label": slack_list.STATUS_READY, "value": "o1"},
+                    {"label": "已完成", "value": "o2"},
+                ]},
+            },
+            slack_list.COL_TITLE: {"id": "title-col", "type": "text"},
+        }
+        output = io.StringIO()
+        with patch.object(slack_list, "schema", return_value=cols), \
+                redirect_stdout(output), redirect_stderr(io.StringIO()):
+            slack_list.cmd_fields()
+
+        got = {e["欄位"]: e for e in json.loads(output.getvalue())}
+        self.assertEqual(got[slack_list.COL_STATUS]["可填的值"],
+                         [slack_list.STATUS_READY, "已完成"])
+        self.assertNotIn("可填的值", got[slack_list.COL_TITLE])
 
 
 if __name__ == "__main__":

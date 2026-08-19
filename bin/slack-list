@@ -54,6 +54,13 @@ STATUS_READY = "PM確認中"
 # 硬填出來的是廢話，PM 下次就整段跳過。另外三段缺一段就不准發（見 cmd_ready --report）。
 REPORT_SECTIONS = ("## 改了什麼", "## 怎麼驗收", "## QA case")
 
+# 列表指令裡，文字欄一格最多印多長。「敘述」欄佔全表輸出的 52%，放的是完整規格；
+# 實測整表印出來 89KB，超過 Claude Code 的 tool result 上限就被存成檔案、只留 2KB
+# preview，agent 反而要再跑好幾輪 grep 把資料撈回來（一題花了 105 秒）。
+# 只截文字欄 —— 指派對象那種放多個 U… 的欄截了就沒法用眼睛比對，等於毀掉。
+# 列表是用來挑出「要看哪幾列」的，全文用 `slack-list replies <record_id>` 或 --full。
+CELL_LIMIT = 120
+
 # 一則訊息裡所有 markdown block 合計的字數上限，Slack 的規格。
 # 破了就改用 --md 當附件（附件沒有這個限制）。
 MARKDOWN_LIMIT = 12000
@@ -303,6 +310,29 @@ def column_index():
                 labels[ch["value"]] = ch.get("label") or ch["value"]
     _COLUMN_INDEX = (names, labels)
     return _COLUMN_INDEX
+
+
+_TEXT_COLUMNS = None
+
+
+def text_columns():
+    """會塞長文的欄位名（schema 型別是 text / rich_text）。
+
+    截斷只套在這些欄上。日期、select、user 欄本來就短，而 user 欄截了會把
+    多個 U… 切一半，比不截還糟。
+    """
+    global _TEXT_COLUMNS
+    if _TEXT_COLUMNS is not None:
+        return _TEXT_COLUMNS
+    try:
+        token, list_id = config()
+        cols = schema(token, list_id, required=())
+    except Exception:
+        _TEXT_COLUMNS = set()
+        return _TEXT_COLUMNS
+    _TEXT_COLUMNS = {n for n, c in cols.items()
+                     if c.get("type") in ("text", "rich_text")}
+    return _TEXT_COLUMNS
 
 
 def cell_text(f, labels):
@@ -723,42 +753,77 @@ def cmd_sample():
 
 
 def cmd_fields():
-    """探索欄位長怎樣：有哪些欄、各自用哪個型別鍵放值。"""
-    seen = {}
+    """這張表有哪些欄、什麼型別、select 欄可以填哪些值。
+
+    以 files.info 的 schema 為正本（含一列都沒填過的欄），再用實際資料補
+    「有值的列數」與範例。
+
+    不列出選項的話 --where 等於沒用：agent 不知道「狀態」能填什麼，只好先把
+    整表撈下來再自己 grep 統計 —— 實際發生過，那一題花了 105 秒。
+    """
+    token, list_id = config()
+    cols = schema(token, list_id, required=())
+    _, labels = column_index()
+
+    stats = {}
     for item in fetch_all():
         for f in item.get("fields") or []:
-            name = f.get("key") or f.get("column_id") or "?"
-            e = seen.setdefault(name, {
-                "key": f.get("key"),
-                "column_id": f.get("column_id"),
-                "n": 0,
-                "value_keys": set(),
-                "sample": "",
-            })
+            e = stats.setdefault(f.get("column_id"), {"n": 0, "sample": ""})
+            text = cell_text(f, labels)
+            if not text:
+                continue
             e["n"] += 1
-            for k in VALUE_KEYS:
-                if f.get(k) not in (None, [], ""):
-                    e["value_keys"].add(k)
-                    if not e["sample"]:
-                        e["sample"] = plain(f[k])[:80]
+            if not e["sample"]:
+                e["sample"] = one_line(text, 80)
+
     out = []
-    for name, e in seen.items():
-        out.append({
-            "name": name,
-            "key": e["key"],
-            "column_id": e["column_id"],
-            "有值的列數": e["n"],
-            "型別": sorted(e["value_keys"]),
-            "範例": e["sample"],
-        })
+    for name, c in cols.items():
+        e = stats.get(c.get("id")) or {"n": 0, "sample": ""}
+        entry = {"欄位": name, "型別": c.get("type"), "有值的列數": e["n"]}
+        choices = ((c.get("options") or {}).get("choices")) or []
+        if choices:
+            entry["可填的值"] = [ch.get("label") or ch.get("value") for ch in choices]
+        elif e["sample"]:
+            entry["範例"] = e["sample"]
+        out.append(entry)
+
     print(json.dumps(out, ensure_ascii=False, indent=2))
+    print("—— 有「可填的值」的欄位可以直接下 slack-list rows --where 欄位=值；"
+          "其他欄位是子字串比對。", file=sys.stderr)
 
 
-def print_rows(rows):
-    for row in (flatten(i) for i in rows):
-        rid = row.pop("_id", "")
+def one_line(text, limit=None):
+    """一格 → 單行。換行壓成空格；limit 有給就再截斷。
+
+    不壓換行的話「一行一列」是假的：敘述欄的換行會讓任何以行為單位的統計算錯，
+    實際發生過 agent 把 114（行）當成列數，真值是 40。
+    """
+    text = " ".join(text.split())
+    if limit and len(text) > limit:
+        return text[:limit].rstrip() + "…"
+    return text
+
+
+def format_row(row, full=False):
+    """flatten() 後的一列 → 一行輸出。--full 原樣印，含換行。"""
+    row = dict(row)
+    rid = row.pop("_id", "")
+    if full:
         cells = " ｜ ".join(f"{k}: {v}" for k, v in row.items())
-        print(f"[{rid}] {cells}")
+    else:
+        long_cols = text_columns()
+        cells = " ｜ ".join(
+            f"{k}: {one_line(v, CELL_LIMIT if k in long_cols else None)}"
+            for k, v in row.items())
+    return f"[{rid}] {cells}"
+
+
+def print_rows(rows, full=False, columns=None):
+    """rows 是 flatten() 之後的 dict。columns 有給就只印那幾欄。"""
+    for row in rows:
+        if columns:
+            row = {k: v for k, v in row.items() if k == "_id" or k in columns}
+        print(format_row(row, full))
 
 
 def all_flag(parser):
@@ -767,14 +832,20 @@ def all_flag(parser):
     return parser
 
 
+def full_flag(parser):
+    parser.add_argument("--full", action="store_true",
+                        help=f"印每一格的完整內容（預設壓成單行並截到 {CELL_LIMIT} 字）")
+    return parser
+
+
 def cmd_todo(argv):
     """人和 agent 都看得懂的一行一列。"""
-    args = all_flag(argparse.ArgumentParser(
+    args = full_flag(all_flag(argparse.ArgumentParser(
         prog="slack-list todo",
-        description="一行一列。預設只印未完成的列。")).parse_args(argv)
+        description="一行一列。預設只印未完成的列。"))).parse_args(argv)
     rows = fetch_all()
     shown = rows if args.all else active_rows(rows)
-    print_rows(shown)
+    print_rows([flatten(i) for i in shown], args.full)
     print(scope_note(len(shown), len(rows), args.all), file=sys.stderr)
 
 
@@ -789,7 +860,7 @@ def cmd_json(argv):
     print(scope_note(len(shown), len(rows), args.all), file=sys.stderr)
 
 
-def print_assigned(uid, kw="", include_done=False):
+def print_assigned(uid, kw="", include_done=False, full=False):
     """印出指派給指定 Slack 使用者的列，可再比對整列關鍵字。"""
     if not re.fullmatch(r"U[A-Z0-9]+", uid):
         die("Slack user ID 要是 U 開頭，例如 U0B54FKJ93R")
@@ -799,25 +870,19 @@ def print_assigned(uid, kw="", include_done=False):
                 if uid in (r.get(COL_ASSIGNEE) or r.get("todo_assignee") or "").split()]
     if kw:
         assigned = [r for r in assigned if kw in json.dumps(r, ensure_ascii=False)]
-    for row in assigned:
-        rid = row.pop("_id", "")
-        cells = " ｜ ".join(f"{k}: {v}" for k, v in row.items())
-        print(f"[{rid}] {cells}")
+    print_rows(assigned, full)
     scope = f"指派給 {uid}" + (f" 且含「{kw}」" if kw else "") + "："
     print("\n" + scope_note(len(assigned), len(items), include_done, scope),
           file=sys.stderr)
 
 
-def resolve_where(expr, fields):
-    """`欄位=值` → (實際欄位名, 值)。
+def resolve_column(name, fields):
+    """使用者給的欄位名 → 實際欄位名。
 
-    欄位名允許只給一部分，因為欄位是 PM 在 Slack UI 上維護的，名字會變。
+    允許只給一部分，因為欄位是 PM 在 Slack UI 上維護的，名字會變。
     對不到就把可用欄位全部印出來 —— 空結果和打錯欄位名長得一樣。
     """
-    if "=" not in expr:
-        die(f"--where 要寫成「欄位=值」，收到的是：{expr}")
-    name, value = expr.split("=", 1)
-    name, value = name.strip(), value.strip()
+    name = name.strip()
     hit = [f for f in fields if name.lower() == f.lower()]
     if not hit:
         hit = [f for f in fields if name.lower() in f.lower()]
@@ -825,7 +890,15 @@ def resolve_where(expr, fields):
         die(f"這個範圍裡沒有「{name}」這個欄位。有的是：{'、'.join(fields)}")
     if len(hit) > 1:
         die(f"「{name}」對到多個欄位：{'、'.join(hit)}。給完整一點的名字。")
-    return hit[0], value
+    return hit[0]
+
+
+def resolve_where(expr, fields):
+    """`欄位=值` → (實際欄位名, 值)。"""
+    if "=" not in expr:
+        die(f"--where 要寫成「欄位=值」，收到的是：{expr}")
+    name, value = expr.split("=", 1)
+    return resolve_column(name, fields), value.strip()
 
 
 def cmd_users(argv):
@@ -878,14 +951,18 @@ def cmd_rows(argv):
     todo / mine / assigned 是它的三個特例，保留成別名。條件不放在子指令名字裡，
     是因為每多一個條件就要多一支子指令，而 skill 也得多教一套語法。
     """
-    ap = all_flag(argparse.ArgumentParser(
+    ap = full_flag(all_flag(argparse.ArgumentParser(
         prog="slack-list rows",
         description="查待辦列，條件可疊加。預設只印未完成。",
-        epilog="例：slack-list rows --assignee U0B8ASE0ARX --where 狀態=PM確認"))
+        epilog="例：slack-list rows --assignee U0B8ASE0ARX --where 狀態=PM確認。"
+               "欄位有哪些值先看 slack-list fields")))
     ap.add_argument("--assignee", metavar="U…", help="指派對象包含這個 Slack user ID")
     ap.add_argument("--created-by", dest="created_by", metavar="U…",
                     help="這一列的建立者。注意 bot 代建的列建立者是 bot，"
                          "要找某人「要求建立」的列請用 --assignee")
+    ap.add_argument("--columns", metavar="欄位,欄位",
+                    help="只印這幾欄，逗號分隔。結果多的時候先用這個把「敘述」拿掉——"
+                         "它佔全表輸出的一半。例：--columns 名稱,狀態")
     ap.add_argument("--where", action="append", default=[], metavar="欄位=值",
                     help="任一欄位的子字串比對，可重複。例：--where 類別=bug "
                          "--where 狀態=PM確認。欄位名可以只給一部分")
@@ -911,10 +988,10 @@ def cmd_rows(argv):
             continue
         picked.append(row)
 
-    for row in picked:
-        rid = row.pop("_id", "")
-        cells = " ｜ ".join(f"{k}: {v}" for k, v in row.items())
-        print(f"[{rid}] {cells}")
+    cols = None
+    if args.columns:
+        cols = [resolve_column(c, fields) for c in args.columns.split(",") if c.strip()]
+    print_rows(picked, args.full, cols)
 
     scope = "、".join(x for x in [
         f"指派給 {args.assignee}" if args.assignee else "",
@@ -943,24 +1020,24 @@ def cmd_rows(argv):
 
 def cmd_mine(argv):
     """Local 用：只印指派給 SLACK_MY_USER_ID 的列。"""
-    ap = all_flag(argparse.ArgumentParser(
+    ap = full_flag(all_flag(argparse.ArgumentParser(
         prog="slack-list mine",
-        description="只印指派給自己的待辦列。預設只印未完成。"))
+        description="只印指派給自己的待辦列。預設只印未完成。")))
     ap.add_argument("keyword", nargs="?", default="", help="可選，過濾整列文字")
     args = ap.parse_args(argv)
-    print_assigned(my_user_id(), args.keyword, args.all)
+    print_assigned(my_user_id(), args.keyword, args.all, args.full)
 
 
 def cmd_assigned(argv):
     """共享 agent 用：只印指派給當次 Slack sender 的列。"""
-    ap = all_flag(argparse.ArgumentParser(
+    ap = full_flag(all_flag(argparse.ArgumentParser(
         prog="slack-list assigned",
         description="只印指派給指定 Slack 使用者的待辦列，可再用關鍵字過濾整列。"
-                    "預設只印未完成。"))
+                    "預設只印未完成。")))
     ap.add_argument("user_id", help="Slack sender ID（U… 開頭）")
     ap.add_argument("keyword", nargs="?", default="", help="可選，過濾整列文字")
     args = ap.parse_args(argv)
-    print_assigned(args.user_id, args.keyword, args.all)
+    print_assigned(args.user_id, args.keyword, args.all, args.full)
 
 
 def active_duplicate(rows, title, cols):
@@ -1488,7 +1565,7 @@ def cmd_env():
 READ_COMMANDS = {
     "raw": (cmd_raw, "Slack 原始回應，完整不加工"),
     "sample": (cmd_sample, "只印第一列的原始結構"),
-    "fields": (cmd_fields, "這張表有哪些欄位、各是什麼型別"),
+    "fields": (cmd_fields, "這張表有哪些欄位、什麼型別、select 欄可以填哪些值"),
     "count": (cmd_count, "共幾列"),
     "env": (cmd_env, "檢查設定有沒有讀到（token 會遮起來）"),
 }

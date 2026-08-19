@@ -43,10 +43,19 @@ cd ~/code/work-helper
 ./bin/slack-list rows --where 類別=bug       # 任一欄位的子字串比對
 ./bin/slack-list rows --where 類別=bug --where 狀態=PM確認   # 條件可疊加
 ./bin/slack-list rows --all                # 連已完成的也印
+./bin/slack-list rows --columns 名稱,狀態    # 只印這幾欄，結果多的時候用
+./bin/slack-list rows --full               # 每一格印完整內容（預設文字欄截到 120 字）
 ./bin/slack-list mine                      # local 專用：等同 --assignee 自己
 ./bin/slack-list json                      # 壓平後的 JSON，要程式處理時用
-./bin/slack-list fields                    # 不確定欄位叫什麼的時候先跑這個
+./bin/slack-list fields                    # 欄位名、型別、select 欄能填哪些值
+./bin/slack-list users 小明                 # 人名關鍵字 → user ID，查 --assignee/--created-by 前先跑
 ```
+
+**下 `--where` 之前先跑 `fields`。** 它會把每個 select 欄的完整選項列出來，例如「狀態」
+有 12 個值（`前端完成`、`後端完成`、`wireframe完成`、`UI完成`、`暫停中（待觀察）`、
+`PM確認中`、`已完成`、`bootstrap`、`NAI`、`PR-Review`、`需要討論`、`需要更多資訊`）。
+不先看就下條件，你只會知道自己撈到的那幾個值 —— 實際發生過：撈了整張表再 grep 統計，
+統計出 4 個值就當成全部，一題花了 105 秒。**選項清單以 `fields` 的輸出為準，不要背這裡的。**
 
 `todo`／`assigned` 是 `rows` 的舊別名，還能用，但新的查詢一律用 `rows` —— 條件加在 flag 上，
 不用再記哪個子指令支援哪個條件。
@@ -54,6 +63,14 @@ cd ~/code/work-helper
 ⚠️ **預設只印未完成的列。** 全表 409 列裡 234 列已完成；未完成是 3 萬字，全表是 9 萬字，
 而那些字會整包進你的 context。**所以找不到一件事的時候，加 `--all` 再找一次才算找過**，
 不要直接回「表上沒有這件事」—— 它很可能只是已完成。每次印完 stderr 都會告訴你這是哪一種視角。
+
+⚠️ **輸出太大會被截掉，而且你不會馬上發現。** 「敘述」欄佔全表輸出的一半，超過上限時
+工具結果會被存成檔案、只留 2KB preview 給你。**條件先下窄，再用 `--columns` 把不需要的欄拿掉**，
+不要撈回來再自己 grep —— 那是把省下的 context 又花掉一次。
+一列一行是保證的（換行已經壓掉），所以 `grep -c '^\[Rec'` 數出來就是列數。
+
+要看某一列的完整敘述，用 `rows --columns 敘述 <關鍵字> --full`，或直接讀那列的留言串
+（`replies Rec0B…`）—— 留言串才是規格的正本。
 
 `--where 欄位=值` 是通用的：欄位名可以只給一部分，對不到會把可用欄位全部列出來。
 **沒比對到任何列時，stderr 會告訴你那一欄實際長什麼樣**——值的種類少（≤25）就全部列出來，
@@ -101,8 +118,9 @@ OpenAB 一律把當次 `sender_id` 同時傳給 `--assignee` 與 `--requested-by
 ```
 
 使用者明確說「回報給 @某人」時，從 Slack mention 取可靠的 `U…` ID，加
-`--report-to U…`。說「不要通知任何人」才加 `--no-reporter`。不能用顯示名稱猜 ID，
-app 沒有 `users:read`。沒特別說時預設回報給 sender。
+`--report-to U…`。說「不要通知任何人」才加 `--no-reporter`。**不要用顯示名稱猜 ID** ——
+只有 mention 和 `slack-list users <關鍵字>` 算可靠來源，後者回超過一個人時要先問是哪一位。
+沒特別說時預設回報給 sender。
 
 `add` 會自行處理精確同名：active列存在時不建第二列，而是把 sender 追加到 assignees，
 並補一則再次回報的來源；原本就有 sender 時只補來源。既有列在「PM確認中」時不改指派，
@@ -292,22 +310,24 @@ PM 的回覆都在該列的 item 留言串裡。
 
 ## 🗂️ 這張表長什麼樣
 
-實際欄位以 `./bin/slack-list fields` 為準。壓平後常見的鍵：
+實際欄位以 `./bin/slack-list fields` 為準。**輸出和 `--where`／`--columns` 用的都是
+Slack UI 上那個中文欄位名**，不是 `Col0B8…` 這種內部 id。常見的幾欄：
 
-| 欄位 | 壓平後的鍵 | 內容 |
-|---|---|---|
-| 指派對象 | `todo_assignee` | user ID，例如 `U0B54FKJ93R`。**一列可以掛多人**，壓平後是空白分隔的字串 |
-| 已完成 | `todo_completed` | checkbox；勾選或封存的列不擋同名新需求 |
-| 到期日 | `todo_due_date` | `YYYY-MM-DD`，相對日期以 `Asia/Taipei` 換算 |
-| 名稱 | `name` | 帶前綴代號，例如 `T04 退貨表供應商欄位刪除`、`V01 在途欄位調整` |
-| 敘述 | `Col0B8E4BG7JT` | 一段說明，**常常被截斷或只有幾個字** |
-| 狀態 | `Col0B9U6UHD16` | 多選，值是 `OptXXXX` 代碼**不是人看的字串**；要對照文字跑 `fields` |
+| 欄位 | 內容 |
+|---|---|
+| 指派對象 | user ID，例如 `U0B54FKJ93R`。**一列可以掛多人**，輸出是空白分隔的字串 |
+| 已完成 | checkbox；有勾才印「是」。勾選或封存的列不擋同名新需求 |
+| 到期日 | `YYYY-MM-DD`，相對日期以 `Asia/Taipei` 換算 |
+| 名稱 | 帶前綴代號，例如 `T04 退貨表供應商欄位刪除`、`V01 在途欄位調整` |
+| 敘述 | 一段說明，**常常被截斷或只有幾個字**；預設印到 120 字，要全文加 `--full` |
+| 狀態 | 多選，輸出已經是人看的標籤（`PM確認中`…），不是 `OptXXXX` 代碼 |
 
 三個要注意的：
 
-- **assignee 只有 ID，沒有名字。** 解成名字要 `users:read`，app 沒有那個 scope。
+- **assignee 只有 ID，沒有名字。** 名字換 ID 跑 `slack-list users <關鍵字>`（打 `users.list`，
+  比對帳號、顯示名稱與全名；缺 `users:read` 時回 `missing_scope`，那時請對方直接給 `U…`）。
   Local自己的 ID 從 `.env` 的 `SLACK_MY_USER_ID` 拿（`mine` 已經處理好）；OpenAB當次使用者
-  從 `openab.sender.v1.sender_id` 拿，交給 `assigned`。
+  從 `openab.sender.v1.sender_id` 拿，交給 `rows --assignee`。
 - **名稱前綴（`T` / `V` / `S` / `D` / `B` + 數字）是某種模組代號，但對應關係還沒確認。**
   不要憑字面猜它對到哪個模組，要用就先問使用者。
 - **`狀態` 是多選，而且前端後端分開** —— 一件事可能同時牽涉
