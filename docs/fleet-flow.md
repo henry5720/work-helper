@@ -6,7 +6,7 @@
 | --- | --- |
 | 誰是誰、誰跟誰交接、你在哪介入 | **這份** |
 | 某條規則當初為什麼這樣定 | [`docs/adr/`](./adr/) |
-| agent 執行用的規則 | [`skills/fleet-recon`](../skills/fleet-recon/SKILL.md)（查現況）、[`skills/fleet-worktree`](../skills/fleet-worktree/SKILL.md)（實作） |
+| agent 執行用的規則 | [`.claude/skills/fleet-recon`](../.claude/skills/fleet-recon/SKILL.md)（查現況）、[`.claude/skills/fleet-worktree`](../.claude/skills/fleet-worktree/SKILL.md)（實作） |
 | 跑一輪、邊跑邊打勾 | [`fleet-dry-run-checklist.md`](./fleet-dry-run-checklist.md) |
 
 > 實測環境：Herdr 0.8.0、Claude Code 2.1.232、Ubuntu 24.04（WSL2）。

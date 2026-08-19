@@ -125,7 +125,7 @@ app 沒有 `users:read`。沒特別說時預設回報給 sender。
 
 **規則不在這裡，在 [`fleet-recon`](../fleet-recon/SKILL.md)** —— 偵察怎麼查、任務怎麼寫、
 `✅` / `⚠️` 怎麼標，那支是唯一權威。架構與規則見
-[`docs/fleet-flow.md`](../../docs/fleet-flow.md)。
+[`docs/fleet-flow.md`](../../../docs/fleet-flow.md)。
 
 這裡只補一件 `fleet-recon` 不可能知道的事，因為它不碰 Slack：
 

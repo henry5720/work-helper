@@ -1,15 +1,18 @@
 # work-helper
 
-工作用的 agent 能力：指令放 `bin/`，自己寫的 skill 放 `skills/`。
+工作用的 agent 能力：指令放 `bin/`，skill 放 `.claude/skills/`。
 **離職就用不到的東西放這裡** —— 跨工作還要用的環境設定在 `dotfiles`，純文件在 `work-docs`。
 
 ```
 bin/slack-list          讀寫「Bug/需求總表」，並把處理進度回報到 Slack
-bin/sync-skills         把 skills/ 全部拉線到 agent 讀得到的位置（新增 skill 後跑一次）
-skills/slack-todo/      ↑ 的 skill：讓 agent 知道有這個東西、什麼時候用
-skills/daily-worklog/   從 git commit 產工作日誌（產出寫進 work-docs）
-skills/fleet-recon/     平行查一批待辦的現況、每件寫成一份草稿（fleet 第一波）
-skills/fleet-worktree/  一份草稿或一個 issue 開成隔離 worktree + 派長駐 agent（fleet 第二波）
+bin/sync-skills         把 .claude/skills/ 全部拉線到別的 repo 也叫得到的位置（新增 skill 後跑一次）
+.claude/skills/slack-todo/      ↑ 的 skill：讓 agent 知道有這個東西、什麼時候用
+.claude/skills/daily-worklog/   從 git commit 產工作日誌（產出寫進 work-docs）
+.claude/skills/fleet-recon/     平行查一批待辦的現況、每件寫成一份草稿（fleet 第一波）
+.claude/skills/fleet-worktree/  一份草稿或一個 issue 開成隔離 worktree + 派長駐 agent（fleet 第二波）
+.claude/skills/grilling/        釐清需求的訪談（第三方，見 skills-lock.json）
+.claude/skills/caveman/         壓縮輸出的講話模式（第三方，見 skills-lock.json）
+skills-lock.json        第三方 skill 的來源與 hash；更新用 `npx skills update -p`
 drafts/                 偵察的草稿（消耗品，gitignore，看完就派工或開 issue 然後刪）
 docs/fleet-flow.md      fleet 的架構與規則：誰是誰、誰跟誰交接、你在哪介入
 docs/fleet-dry-run-checklist.md  跑一輪 fleet 的打勾表（消耗品，跑完清空）
@@ -155,7 +158,7 @@ bin/slack-list draft Rec0B… \
 ```
 
 `--report` 是一份 md，整份當訊息本體發出去，模板固定四段 —— 改了什麼／⚠️ 要先知道的（有才寫）
-／怎麼驗收／QA case。範本是 `skills/slack-todo/report-template.md`，缺段就不准發。
+／怎麼驗收／QA case。範本是 `.claude/skills/slack-todo/report-template.md`，缺段就不准發。
 表格靠 Slack 的 `markdown` block 送，Slack 會在伺服器端把它拆成原生 blocks（`## 標題` 變
 `header`、pipe table 變 `table`），所以 QA case 在 Slack 裡是一張真的表格，不是一堆 `|`。
 上限是一則訊息 12,000 字，破了才改用 `--md` 當附件。

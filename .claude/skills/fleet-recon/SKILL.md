@@ -8,11 +8,11 @@ description: 偵察 —— 平行查一批待辦的現況，每件寫成一份�
 **你是偵察，不是動工。** 這一輪的產出是**一批草稿檔**，不是一行 code，也不是 issue。
 
 ⚠️ **你不開 issue、不查重、不改任何檔案（除了自己那份草稿）。** 對外的動作全部由總管理做 ——
-N 個偵察平行跑的時候互相看不見，各自查重、各自開，同一批裡的重複擋不住。理由見 [ADR-0006](../../docs/adr/0006-recon-writes-a-draft-not-an-issue.md)。
+N 個偵察平行跑的時候互相看不見，各自查重、各自開，同一批裡的重複擋不住。理由見 [ADR-0006](../../../docs/adr/0006-recon-writes-a-draft-not-an-issue.md)。
 
 一件事一個 worker，平行跑。說「分析」就會自己 fan out —— 不需要有人告訴你開幾個。
 
-> **架構與規則**：[`docs/fleet-flow.md`](../../docs/fleet-flow.md)；**某條規則當初為什麼這樣定**：[`docs/adr/`](../../docs/adr/)。
+> **架構與規則**：[`docs/fleet-flow.md`](../../../docs/fleet-flow.md)；**某條規則當初為什麼這樣定**：[`docs/adr/`](../../../docs/adr/)。
 > 改執行規則改這份 SKILL.md，改判斷邊界改 fleet-flow。
 
 > 📁 **路徑假設**：`~/code/` 底下是兄弟目錄（`work-helper`、`work-docs`、各專案 repo）。

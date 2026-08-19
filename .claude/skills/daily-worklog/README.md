@@ -10,11 +10,11 @@ skill 不需要「安裝程式」，就是一個資料夾放進 `~/.claude/skill
 
 ```bash
 # 已經 clone 了 work-helper：做 symlink，之後 git pull 就會自動更新
-ln -sfn ~/code/work-helper/skills/daily-worklog ~/.claude/skills/daily-worklog
+ln -sfn ~/code/work-helper/.claude/skills/daily-worklog ~/.claude/skills/daily-worklog
 ```
 
 換一台機器就是 clone `work-helper` 再把 `skills/` 底下全部拉線，見
-[repo 根目錄的 README](../../README.md#裝成-skill)。
+[repo 根目錄的 README](../../../README.md#裝成-skill)。
 
 裝好之後開新 session，說「幫我寫今天的工作日誌」就會自動觸發。
 

@@ -20,7 +20,7 @@ slug ＝ **issue 編號 + 短名**，它同時決定四樣東西：
 
 編號寫在 branch 名裡，所以**重複做同一件事會當場現形**。
 
-> **架構與規則**：[`docs/fleet-flow.md`](../../docs/fleet-flow.md)；**某條規則當初為什麼這樣定**：[`docs/adr/`](../../docs/adr/)。
+> **架構與規則**：[`docs/fleet-flow.md`](../../../docs/fleet-flow.md)；**某條規則當初為什麼這樣定**：[`docs/adr/`](../../../docs/adr/)。
 > 改執行規則改這份 SKILL.md，改判斷邊界改 fleet-flow。
 
 > 📁 **路徑假設**：`~/code/` 底下是兄弟目錄。這台機器不是這樣擺的話 `ls ~/code` 看一眼，找不到就問使用者。
@@ -119,7 +119,7 @@ herdr agent prompt "$SLUG" "讀 .claude/handoff.md，你 own issue #$ISSUE。
 ⚠️ **升級規則：做到一半發現跨天了就開 issue。** 要拆、PM 又補了規格、使用者被叫去開會 ——
 **把草稿當 body `gh issue create`，繼續做**，之後照正常流程走。
 判準是「這件事還會不會被打斷第二次」，不是「改了幾行」。
-→ [ADR-0008](../../docs/adr/0008-same-day-work-skips-the-issue.md)
+→ [ADR-0008](../../../docs/adr/0008-same-day-work-skips-the-issue.md)
 
 ### issue 標了 `⚠️ 做法未定`：先對齊，再寫計畫
 
