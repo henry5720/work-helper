@@ -911,7 +911,7 @@ def cmd_users(argv):
     ap = argparse.ArgumentParser(
         prog="slack-list users",
         description="用關鍵字找 Slack 成員，印出 user ID。比對帳號、顯示名稱與全名。")
-    ap.add_argument("keyword", help="姓名或帳號的一部分，不分大小寫")
+    ap.add_argument("keyword", help="姓名或帳號的一部分，或直接給 U… 反查是誰")
     ap.add_argument("--all", action="store_true", help="連停用帳號與 bot 也印")
     args = ap.parse_args(argv)
 
@@ -927,9 +927,12 @@ def cmd_users(argv):
             if not args.all and (m.get("deleted") or m.get("is_bot")):
                 continue
             prof = m.get("profile") or {}
+            # user ID 也要比對，而且是完全相符 —— 表上只存 ID，列出「指派對象」之後
+            # 一定會需要反查是誰。只比對名字的話這個方向查不了，實際發生過 agent
+            # 只好把 U0B5PH9P62G 原封不動印給人看。
             names = [m.get("name") or "", m.get("real_name") or "",
                      prof.get("display_name") or "", prof.get("real_name") or ""]
-            if any(kw in n.lower() for n in names if n):
+            if (m.get("id") or "").lower() == kw or any(kw in n.lower() for n in names if n):
                 hits.append((m.get("id"), prof.get("display_name") or m.get("name") or "",
                              prof.get("real_name") or m.get("real_name") or ""))
         cursor = (body.get("response_metadata") or {}).get("next_cursor") or ""
@@ -939,7 +942,10 @@ def cmd_users(argv):
     for uid, disp, real in hits:
         print(f"{uid}\t{disp}\t{real}")
     if not hits:
-        print(f"找不到符合「{args.keyword}」的成員。", file=sys.stderr)
+        hint = ""
+        if re.fullmatch(r"U[A-Z0-9]+", args.keyword) and not args.all:
+            hint = "。這個 ID 可能是已停用的帳號或 bot，加 --all 再查一次"
+        print(f"找不到符合「{args.keyword}」的成員{hint}。", file=sys.stderr)
     elif len(hits) > 1:
         print(f"—— {len(hits)} 個符合。人名可能重複，用哪一個要先確認，不要猜。",
               file=sys.stderr)

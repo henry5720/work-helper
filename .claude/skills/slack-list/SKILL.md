@@ -49,6 +49,7 @@ cd ~/code/work-helper
 ./bin/slack-list json                      # 壓平後的 JSON，要程式處理時用
 ./bin/slack-list fields                    # 欄位名、型別、select 欄能填哪些值
 ./bin/slack-list users 小明                 # 人名關鍵字 → user ID，查 --assignee/--created-by 前先跑
+./bin/slack-list users U0B…                # 反過來：ID → 是誰。回覆前把 ID 換成名字
 ```
 
 **下 `--where` 之前先跑 `fields`。** 它會把每個 select 欄的完整選項列出來，例如「狀態」
@@ -324,8 +325,10 @@ Slack UI 上那個中文欄位名**，不是 `Col0B8…` 這種內部 id。常�
 
 三個要注意的：
 
-- **assignee 只有 ID，沒有名字。** 名字換 ID 跑 `slack-list users <關鍵字>`（打 `users.list`，
-  比對帳號、顯示名稱與全名；缺 `users:read` 時回 `missing_scope`，那時請對方直接給 `U…`）。
+- **assignee 只有 ID，沒有名字。** 兩個方向都走 `slack-list users`：給關鍵字得到 ID，
+  給 `U…` 得到是誰（打 `users.list`，比對 ID、帳號、顯示名稱與全名；缺 `users:read` 時回
+  `missing_scope`，那時請對方直接給 `U…`）。**回覆給人看之前，把 ID 換成名字** ——
+  貼一串 `U0B5PH9P62G` 出去，對方還要自己去查那是誰。
   Local自己的 ID 從 `.env` 的 `SLACK_MY_USER_ID` 拿（`mine` 已經處理好）；OpenAB當次使用者
   從 `openab.sender.v1.sender_id` 拿，交給 `rows --assignee`。
 - **名稱前綴（`T` / `V` / `S` / `D` / `B` + 數字）是某種模組代號，但對應關係還沒確認。**

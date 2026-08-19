@@ -797,6 +797,38 @@ class SlackListTest(unittest.TestCase):
                          [slack_list.STATUS_READY, "已完成"])
         self.assertNotIn("可填的值", got[slack_list.COL_TITLE])
 
+    @patch.object(slack_list, "config", return_value=("xoxb-token", "F123"))
+    @patch.object(slack_list, "api_get")
+    def test_users_resolves_a_slack_id_back_to_a_name(self, api_get, config):
+        # 表上只存 ID，列出「指派對象」之後一定會需要反查是誰。
+        api_get.return_value = {
+            "members": [
+                {"id": "U123", "name": "henry", "profile": {"display_name": "henry"}},
+                {"id": "U456", "name": "whales", "profile": {"display_name": "Whales"}},
+            ],
+            "response_metadata": {"next_cursor": ""},
+        }
+        output = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(io.StringIO()):
+            slack_list.cmd_users(["U456"])
+
+        self.assertEqual(output.getvalue().strip().split("\t")[0], "U456")
+        self.assertNotIn("U123", output.getvalue())
+
+    @patch.object(slack_list, "config", return_value=("xoxb-token", "F123"))
+    @patch.object(slack_list, "api_get")
+    def test_users_id_match_is_exact_not_substring(self, api_get, config):
+        api_get.return_value = {
+            "members": [{"id": "U1234", "name": "henry", "profile": {}}],
+            "response_metadata": {"next_cursor": ""},
+        }
+        output, errors = io.StringIO(), io.StringIO()
+        with redirect_stdout(output), redirect_stderr(errors):
+            slack_list.cmd_users(["U123"])
+
+        self.assertEqual(output.getvalue(), "")
+        self.assertIn("已停用的帳號或 bot", errors.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
