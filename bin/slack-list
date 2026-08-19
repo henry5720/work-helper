@@ -244,14 +244,26 @@ def active_rows(items):
     return out
 
 
-def scope_note(shown, total, include_done, extra=""):
+def done_count(items):
+    """這幾列裡有幾列已經勾完成。"""
+    return sum(1 for it in items
+               if any(f.get("key") == "todo_completed" and checkbox_value(f)
+                      for f in it.get("fields") or []))
+
+
+def scope_note(shown, total, include_done, extra="", done=None):
     """印在 stderr 的範圍說明。
 
     一定要講清楚這是不是完整的表 —— 少了這句，agent 看到過濾後的結果會直接
     回「PM 沒有這件事」，而那件事只是已完成。
+
+    加了 --all 就要再講「其中幾列已完成」：已完成的列狀態欄常常還留著舊值，
+    只報總數的話早就結案的事會被當成待辦。實際發生過：同一個問題不加 --all 是
+    6 件、加了是 26 件，多出來的 20 件全都已經勾完成，而回覆只說「共 26 件」。
     """
     if include_done:
-        return f"—— {extra}{shown} 列（全表 {total} 列，含已完成）"
+        detail = f"其中 {done} 列已完成；" if done is not None else ""
+        return f"—— {extra}{shown} 列（{detail}全表 {total} 列）"
     return (f"—— {extra}{shown} 列未完成"
             f"（全表 {total} 列；已完成的沒印，要看加 --all）")
 
@@ -846,7 +858,8 @@ def cmd_todo(argv):
     rows = fetch_all()
     shown = rows if args.all else active_rows(rows)
     print_rows([flatten(i) for i in shown], args.full)
-    print(scope_note(len(shown), len(rows), args.all), file=sys.stderr)
+    print(scope_note(len(shown), len(rows), args.all,
+                     done=done_count(shown) if args.all else None), file=sys.stderr)
 
 
 def cmd_json(argv):
@@ -857,7 +870,8 @@ def cmd_json(argv):
     rows = fetch_all()
     shown = rows if args.all else active_rows(rows)
     print(json.dumps([flatten(i) for i in shown], ensure_ascii=False, indent=2))
-    print(scope_note(len(shown), len(rows), args.all), file=sys.stderr)
+    print(scope_note(len(shown), len(rows), args.all,
+                     done=done_count(shown) if args.all else None), file=sys.stderr)
 
 
 def print_assigned(uid, kw="", include_done=False, full=False):
@@ -865,14 +879,16 @@ def print_assigned(uid, kw="", include_done=False, full=False):
     if not re.fullmatch(r"U[A-Z0-9]+", uid):
         die("Slack user ID 要是 U 開頭，例如 U0B54FKJ93R")
     items = fetch_all()
-    rows = [flatten(i) for i in (items if include_done else active_rows(items))]
-    assigned = [r for r in rows
+    pairs = [(i, flatten(i)) for i in (items if include_done else active_rows(items))]
+    assigned = [(i, r) for i, r in pairs
                 if uid in (r.get(COL_ASSIGNEE) or r.get("todo_assignee") or "").split()]
     if kw:
-        assigned = [r for r in assigned if kw in json.dumps(r, ensure_ascii=False)]
-    print_rows(assigned, full)
+        assigned = [(i, r) for i, r in assigned
+                    if kw in json.dumps(r, ensure_ascii=False)]
+    print_rows([r for _, r in assigned], full)
     scope = f"指派給 {uid}" + (f" 且含「{kw}」" if kw else "") + "："
-    print("\n" + scope_note(len(assigned), len(items), include_done, scope),
+    print("\n" + scope_note(len(assigned), len(items), include_done, scope,
+                            done_count([i for i, _ in assigned]) if include_done else None),
           file=sys.stderr)
 
 
@@ -992,12 +1008,12 @@ def cmd_rows(argv):
             continue
         if args.keyword and args.keyword not in json.dumps(row, ensure_ascii=False):
             continue
-        picked.append(row)
+        picked.append((item, row))
 
     cols = None
     if args.columns:
         cols = [resolve_column(c, fields) for c in args.columns.split(",") if c.strip()]
-    print_rows(picked, args.full, cols)
+    print_rows([r for _, r in picked], args.full, cols)
 
     scope = "、".join(x for x in [
         f"指派給 {args.assignee}" if args.assignee else "",
@@ -1006,7 +1022,9 @@ def cmd_rows(argv):
         f"含「{args.keyword}」" if args.keyword else "",
     ] if x)
     print("\n" + scope_note(len(picked), len(items), args.all,
-                            (scope + "：") if scope else ""), file=sys.stderr)
+                            (scope + "：") if scope else "",
+                            done_count([i for i, _ in picked]) if args.all else None),
+          file=sys.stderr)
 
     # 打錯值時，空結果和「真的沒有」長得一樣。把該欄實際出現過的值印出來 ——
     # 但只在低基數時列舉；欄位有幾百種值的話列出來又是一份雜訊。

@@ -713,7 +713,8 @@ class SlackListTest(unittest.TestCase):
 
         self.assertIn("已經做完", output.getvalue())
         self.assertIn("被封存", output.getvalue())
-        self.assertIn("含已完成", errors.getvalue())
+        # 只報總數的話，狀態欄還留著舊值的已結案列會被當成待辦
+        self.assertIn("其中 1 列已完成", errors.getvalue())
 
     @patch.object(slack_list, "fetch_all")
     def test_json_defaults_to_open_rows(self, fetch_all):
