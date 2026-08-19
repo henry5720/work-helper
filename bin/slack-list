@@ -63,6 +63,13 @@ MARKDOWN_LIMIT = 12000
 # Python-urllib/3.12 → 403、python-requests → 200、這個 → 200。
 URL_CHECK_UA = "slack-list/1.0 (+work-helper)"
 
+# 一頁抓幾列。這支 API 沒有任何過濾參數（只有 limit / cursor / archived），
+# 所以整張表一定要翻完，能省的只有往返次數。
+# 實測上限不是一個乾淨的數字，是「回應大到 1 MB 左右就會偶發被截斷」：
+# limit=200 → 530 KB ok、300 → 767 KB ok、500 → 1.1 MB，第二次就 IncompleteRead。
+# 200 讓 409 列從 5 次往返降到 3 次，而且離那個邊界還很遠。
+PAGE_LIMIT = 200
+
 ORIGIN_BLOCK = re.compile(r"work_helper_origin_v1_(U[A-Z0-9]+)")
 REPORTER_BLOCK = re.compile(
     r"work_helper_reporter_v1_(user_(U[A-Z0-9]+)|none|default)"
@@ -201,7 +208,7 @@ def fetch_all():
     token, list_id = config()
     items, cursor = [], None
     while True:
-        payload = {"list_id": list_id, "limit": 100}
+        payload = {"list_id": list_id, "limit": PAGE_LIMIT}
         if cursor:
             payload["cursor"] = cursor
         body = api("slackLists.items.list", payload, token)
