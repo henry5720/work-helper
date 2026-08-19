@@ -158,7 +158,7 @@ bin/slack-list draft Rec0B… \
   --requested-by U0B…
 ```
 
-`--report` 是一份 md，整份當訊息本體發出去，模板固定四段 —— 改了什麼／⚠️ 要先知道的（有才寫）
+`--report` 是一份 md，整份當訊息本體發出去，模板固定四段 —— 改了什麼／⚠️ 要先知道的事（有才寫）
 ／怎麼驗收／QA case。範本是 `.claude/skills/slack-list/report-template.md`，缺段就不准發。
 表格靠 Slack 的 `markdown` block 送，Slack 會在伺服器端把它拆成原生 blocks（`## 標題` 變
 `header`、pipe table 變 `table`），所以 QA case 在 Slack 裡是一張真的表格，不是一堆 `|`。
