@@ -828,6 +828,50 @@ def resolve_where(expr, fields):
     return hit[0], value
 
 
+def cmd_users(argv):
+    """人名 → Slack user ID。
+
+    表上只存 user ID，所以「whales 建立的那些」這種問題一定要先解析人名。
+    這支用 bot token 的 users:read 做，不要改用 claude.ai 的 Slack connector ——
+    那條路是用另一個人的 Slack 身分，不受這張表的權限邊界約束。
+    """
+    ap = argparse.ArgumentParser(
+        prog="slack-list users",
+        description="用關鍵字找 Slack 成員，印出 user ID。比對帳號、顯示名稱與全名。")
+    ap.add_argument("keyword", help="姓名或帳號的一部分，不分大小寫")
+    ap.add_argument("--all", action="store_true", help="連停用帳號與 bot 也印")
+    args = ap.parse_args(argv)
+
+    token, _ = config()
+    kw = args.keyword.lower()
+    hits, cursor = [], None
+    while True:
+        params = {"limit": 200}
+        if cursor:
+            params["cursor"] = cursor
+        body = api_get("users.list", params, token)
+        for m in body.get("members") or []:
+            if not args.all and (m.get("deleted") or m.get("is_bot")):
+                continue
+            prof = m.get("profile") or {}
+            names = [m.get("name") or "", m.get("real_name") or "",
+                     prof.get("display_name") or "", prof.get("real_name") or ""]
+            if any(kw in n.lower() for n in names if n):
+                hits.append((m.get("id"), prof.get("display_name") or m.get("name") or "",
+                             prof.get("real_name") or m.get("real_name") or ""))
+        cursor = (body.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor:
+            break
+
+    for uid, disp, real in hits:
+        print(f"{uid}\t{disp}\t{real}")
+    if not hits:
+        print(f"找不到符合「{args.keyword}」的成員。", file=sys.stderr)
+    elif len(hits) > 1:
+        print(f"—— {len(hits)} 個符合。人名可能重複，用哪一個要先確認，不要猜。",
+              file=sys.stderr)
+
+
 def cmd_rows(argv):
     """一支查詢指令，條件用 flag 疊加。
 
@@ -1451,6 +1495,7 @@ READ_COMMANDS = {
 
 # 這幾支自己吃參數，各自有 --help
 ARG_READ_COMMANDS = {
+    "users": (cmd_users, "人名關鍵字 → Slack user ID（查 --assignee/--created-by 要用）"),
     "rows": (cmd_rows, "查待辦列，--assignee/--created-by/--where 欄位=值/關鍵字可疊加"),
     "todo": (cmd_todo, "一行一列，人看的（預設）；只印未完成，--all 看全部"),
     "mine": (cmd_mine, "只印指派給我的未完成列，可多帶一個關鍵字再過濾"),
