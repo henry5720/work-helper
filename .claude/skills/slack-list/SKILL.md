@@ -40,8 +40,8 @@ cd ~/code/work-helper
 ./bin/slack-list rows 庫存                  # 關鍵字比對整列文字，不分欄位
 ./bin/slack-list rows --assignee U0B…       # 指派給某人
 ./bin/slack-list rows --created-by U0B…     # 某人建立的列
-./bin/slack-list rows --status PM確認        # 狀態欄子字串比對
-./bin/slack-list rows --assignee U0B… --status 前端完成   # 條件可疊加
+./bin/slack-list rows --where 類別=bug       # 任一欄位的子字串比對
+./bin/slack-list rows --where 類別=bug --where 狀態=PM確認   # 條件可疊加
 ./bin/slack-list rows --all                # 連已完成的也印
 ./bin/slack-list mine                      # local 專用：等同 --assignee 自己
 ./bin/slack-list json                      # 壓平後的 JSON，要程式處理時用
@@ -55,8 +55,10 @@ cd ~/code/work-helper
 而那些字會整包進你的 context。**所以找不到一件事的時候，加 `--all` 再找一次才算找過**，
 不要直接回「表上沒有這件事」—— 它很可能只是已完成。每次印完 stderr 都會告訴你這是哪一種視角。
 
-`--status` 沒比對到任何列時，stderr 會列出這個範圍裡實際出現過的狀態值。空結果配上那份清單，
-才分得出是「真的沒有」還是「你把狀態值打錯了」。狀態值是 PM 在表上自由維護的，不要寫死。
+`--where 欄位=值` 是通用的：欄位名可以只給一部分，對不到會把可用欄位全部列出來。
+**沒比對到任何列時，stderr 會告訴你那一欄實際長什麼樣**——值的種類少（≤25）就全部列出來，
+種類多就只給總數和最常見的幾個。空結果配上那份清單，才分得出是「真的沒有」「值打錯了」
+還是「欄位名寫錯了」。欄位和選項都是 PM 在 Slack UI 上維護的，不要在任何地方寫死。
 
 從 terminal/local agent問「我身上有什麼事」「跟 X 有關的」用 `mine`。
 從 OpenAB 回應 Slack 訊息時，「我」是 `openab.sender.v1.sender_id`，用
