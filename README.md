@@ -69,28 +69,22 @@ Slack 點自己頭像 → 個人檔案 → 右上「⋮」→ 複製成員 ID。
 bin/slack-list env      # 先確認設定讀到了（token 會遮起來）
 bin/slack-list count    # 通不通，看這個最快
 bin/slack-list fields   # 這張表有哪些欄位、各是什麼型別
-bin/slack-list todo     # 一行一列，人看的
-bin/slack-list mine     # 只印指派給我的列
-bin/slack-list mine 庫存 # 指派給我、而且整列文字含「庫存」的
-bin/slack-list assigned U0B… 庫存 # 共享 agent：指派給當次 Slack sender 的列
-bin/slack-list json     # 壓平後的 JSON，給程式吃
-bin/slack-list raw      # Slack 原始回應，不加工
-bin/slack-list sample   # 只印第一列的原始結構
-
-# OpenAB sender context → 待辦列 + 完整留言 JSON
-bin/slack-list context --channel C0B9… --thread-ts 1234567890.123456
+bin/slack-list rows     # 查詢入口：一行一列，預設只印未完成
+bin/slack-list users 小明   # 人名關鍵字 → user ID，查 --assignee 之前先跑
 ```
 
-`todo` 是預設，`bin/slack-list` 不帶參數就是它。
+`rows` 是預設，`bin/slack-list` 不帶參數就是它。條件都加在 flag 上
+（`--assignee`／`--created-by`／`--where 欄位=值`／`--all`），`todo`／`mine`／`assigned`
+是舊別名。**完整的指令與規矩看
+[`.claude/skills/slack-list/SKILL.md`](.claude/skills/slack-list/SKILL.md)** ——
+那份是正本，這裡不重複列一遍。
 
-`mine` 給沒有 Slack message context 的 local agent使用，以 `.env` 的
-`todo`／`mine`／`assigned`／`json` **預設只印未完成的列** —— 全表 409 列裡 234 列已完成，
-全印是 20 萬字，而讀它的通常是 agent，那 20 萬字就是 token。要看全部加 `--all`；
-每次印完 stderr 都會說明這是哪一種視角，免得把過濾後的結果當成整張表。
-「已完成的不算」在 `add` 的查重那邊本來就是這個語意（`active_duplicate`）。
+`--all` 沒加就只有未完成的列：全表 409 列裡 234 列已完成，未完成 3 萬字、全表 9 萬字，
+而讀它的通常是 agent，那些字就是 token。找不到一件事時加 `--all` 再找一次才算找過。
 
-`SLACK_MY_USER_ID` 解釋「我」。OpenAB收到 Slack訊息時已知道當次 `sender_id`，要用
-`assigned <sender_id>`；不要把共享環境裡的固定 ID當成目前說話的人。
+`SLACK_MY_USER_ID` 解釋 `mine` 的「我」，那是給沒有 Slack message context 的 local agent 用的。
+OpenAB 收到 Slack 訊息時已知道當次 `sender_id`，要用 `rows --assignee <sender_id>`；
+不要把共享環境裡的固定 ID 當成目前說話的人。
 
 ## 建立待辦與設定回報
 
