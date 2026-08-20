@@ -2,28 +2,55 @@
 # 把 .claude/skills/ 底下每個資料夾拉線到 agent 讀得到的兩個位置。
 # 這些連結是讓這些 skill 在「別的 repo」也叫得到（personal level）；
 # 只在 work-helper 裡工作的話 project level 就夠了，不需要跑這支。
-# 可以重複跑：已存在的連結會被覆蓋，指向 work-helper 但來源已刪的死連結會被清掉。
+# 可以重複跑：已存在的連結會被覆蓋，指向這個 repo 但來源已刪的死連結會被清掉。
 set -euo pipefail
 
-src="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.claude/skills" && pwd)"
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+src="$repo/.claude/skills"
 targets=("$HOME/.agents/skills" "$HOME/.claude/skills")
+drift=0
 
 for t in "${targets[@]}"; do
   mkdir -p "$t"
 
-  # 清掉指向 work-helper、但來源已經不在的連結
+  # 清掉指向這個 repo、但來源已經不在的連結。
+  # 比對整個 $repo 而不是只比 $src：skill 目錄搬過一次家（skills/ → .claude/skills/），
+  # 只認 $src 的話，指著舊路徑的死連結永遠清不掉。
   for link in "$t"/*; do
     [ -L "$link" ] || continue
-    dest="$(readlink "$link")"
-    case "$dest" in
-      "$src"/*) [ -e "$link" ] || { rm "$link"; echo "removed $link"; } ;;
+    case "$(readlink "$link")" in
+      "$repo"/*) [ -e "$link" ] || { rm "$link"; echo "removed $link"; } ;;
     esac
   done
 
   for s in "$src"/*/; do
     [ -f "$s/SKILL.md" ] || continue
     n="$(basename "$s")"
+
+    # 目標是實體目錄時不能 ln -sfn：它不會覆蓋，而是把連結塞進那個目錄裡面
+    # （變成 $t/$n/$n），還不報錯。
+    #
+    # 第三方 skill 本來就會有兩份，這是設計不是漏的：global 的
+    # ~/.agents/.skill-lock.json 和這個 repo 的 skills-lock.json 各記一份，各自用
+    # `npx skills update -g` / `-p` 更新。repo 那份是給 work-agent-deploy 的
+    # container（compose.yaml 只 mount .claude/skills，連結指到 repo 外面在裡面是斷的），
+    # 拿掉它 bot 就沒 skill 可讀。刪掉 global 那份也沒用，lock 還記著，下次全域更新會寫回來。
+    #
+    # 所以共存不叫錯，只有兩份內容不一樣才是 ADR 0011 講的問題：本機和 bot 跑到不同版本。
+    if [ -d "$t/$n" ] && [ ! -L "$t/$n" ]; then
+      if diff -rq "${s%/}" "$t/$n" >/dev/null 2>&1; then
+        echo "same    $t/$n（實體目錄，內容跟這個 repo 一樣，不動）"
+      else
+        echo "DRIFT   $t/$n 跟 ${s%/} 內容不一樣 —— 本機和 bot 會跑到不同版本，自己挑一份留" >&2
+        drift=1
+      fi
+      continue
+    fi
+
     ln -sfn "${s%/}" "$t/$n"
     echo "linked  $t/$n"
   done
 done
+
+# 只有兩份內容不一樣才算沒跑完，讓串在後面的指令停下來
+[ "$drift" -eq 0 ]
