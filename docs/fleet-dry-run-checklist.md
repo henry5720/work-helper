@@ -5,8 +5,10 @@
 >
 > 目的不是驗證指令能不能跑（那些都測過了），是驗證**這個流程你用起來順不順、哪一步最花時間**。
 >
-> **對齊版本**：2026-08-17 修訂 —— 操作規則在 `fleet-recon` / `fleet-worktree` 兩支 skill，
-> [fleet-flow.md](./fleet-flow.md) 是架構與規則、[`docs/adr/`](./adr/) 是當初的理由，這份是打勾表。
+> **對齊版本**：2026-08-20 修訂 —— [fleet-flow.md](./fleet-flow.md) 是架構與規則、
+> [`docs/adr/`](./adr/) 是當初的理由，這份是打勾表。
+> `fleet-recon` / `fleet-worktree` 兩支 skill 都已刪（理由見 fleet-flow.md〈現況與待辦〉）。
+> 接單的機械動作在 `bin/fleet` 寫好之前手打，該打什麼見同一節。
 
 ---
 
@@ -89,7 +91,7 @@
 
 ## 2. 派偵察（**不開 pane、不開 worktree、不先開 issue**）
 
-- [ ] 在總管理 pane 裡叫 `fleet-recon`
+- [ ] 在總管理 pane 裡說「這幾件查一下」，讓它自己決定怎麼查、開幾個
 - [ ] repo 外的來源路徑（PM 文件 / prototype）—— **只有這種才給**
 - [ ] 記下你**有沒有**手動貼 repo 內的路徑：有 / 沒有
 
@@ -165,7 +167,8 @@
 
 ## 5. 開 worktree 派工（接單）
 
-- [ ] 叫 `fleet-worktree`（指令都在裡面）
+- [ ] 照 fleet-flow.md〈現況與待辦〉那七步手打（`bin/fleet` 還沒寫）
+- [ ] 記下哪一步最卡 —— **那就是 `bin/fleet` 最該先包的**：____
 - [ ] 裝依賴花了幾秒：____
 - [ ] `herdr agent list` 看得到這個 slug，而且**有 name**
 - [ ] 寫完身分卡後跑一次 `git status --short` —— **應該還是空的**（驗 exclude 那條有效）

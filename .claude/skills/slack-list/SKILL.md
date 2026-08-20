@@ -164,11 +164,10 @@ OpenAB 一律把當次 `sender_id` 同時傳給 `--assignee` 與 `--requested-by
 
 ## 🔍 被派去查一件待辦時
 
-**規則不在這裡，在 [`fleet-recon`](../fleet-recon/SKILL.md)** —— 偵察怎麼查、任務怎麼寫、
-`✅` / `⚠️` 怎麼標，那支是唯一權威。架構與規則見
-[`docs/fleet-flow.md`](../../../docs/fleet-flow.md)。
+**草稿／issue body 的格式照你所在 repo 的 `CLAUDE.md` 觸發表指的那份規範**，不在這裡寫第二份。
+怎麼查由你自己決定。架構與你在哪介入見 [`docs/fleet-flow.md`](../../../docs/fleet-flow.md)。
 
-這裡只補一件 `fleet-recon` 不可能知道的事，因為它不碰 Slack：
+這裡只補一件那份規範不可能知道的事，因為它不碰 Slack：
 
 ⚠️ **`敘述` 欄常常只有「功能…」，真規格在那一列的留言串裡**（`bin/slack-list replies`）。
 沒讀留言就去查 repo，你拿到的需求會比實際的少一半。
