@@ -8,8 +8,6 @@ bin/slack-list          讀寫「Bug/需求總表」，並把處理進度回報�
 bin/sync-skills         把 .claude/skills/ 全部拉線到別的 repo 也叫得到的位置（新增 skill 後跑一次）
 .claude/skills/slack-list/      ↑ 的 skill：讓 agent 知道有這個東西、什麼時候用
 .claude/skills/daily-worklog/   從 git commit 產工作日誌（只輸出文字，不落檔）
-.claude/skills/fleet-recon/     平行查一批待辦的現況、每件寫成一份草稿（fleet 第一波）
-.claude/skills/fleet-worktree/  一份草稿或一個 issue 開成隔離 worktree + 派長駐 agent（fleet 第二波）
 .claude/skills/grilling/        釐清需求的訪談（第三方，見 skills-lock.json）
 .claude/skills/caveman/         壓縮輸出的講話模式（第三方，見 skills-lock.json）
 skills-lock.json        第三方 skill 的來源與 hash；更新用 `npx skills update -p`
@@ -17,7 +15,7 @@ docs/adr/0011-...       skill 為什麼放 .claude/skills、為什麼是每支�
 drafts/                 偵察的草稿（消耗品，gitignore，看完就派工或開 issue 然後刪）
 docs/fleet-flow.md      fleet 的架構與規則：誰是誰、誰跟誰交接、你在哪介入
 docs/fleet-dry-run-checklist.md  跑一輪 fleet 的打勾表（消耗品，跑完清空）
-docs/adr/               架構決定與當初的理由（含 fleet 的七個），改之前先讀
+docs/adr/               架構決定與當初的理由（含 fleet 的那幾個），改之前先讀
 CONTEXT.md              這條線上會混淆的詞（待辦列、任務、草稿、指紋…）
 ```
 

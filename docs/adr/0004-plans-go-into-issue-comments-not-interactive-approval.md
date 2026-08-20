@@ -1,5 +1,8 @@
 # 計畫寫進 issue comment，不用 plan mode 的互動核可
 
+> ⚠️ **這條已被 [ADR-0013](./0013-alignment-replaces-plan-review.md) 取代**（2026-08-20）。
+> 下面的對照表沒有算錯 —— 它輸在表上沒有的一欄：那些 comment 沒有讀者。原文留著。
+
 接單的 agent 先把實作計畫 comment 回 issue，然後停；你批次看完才放行。
 不用 Claude Code plan mode 那種「跳出來等你按同意」。
 

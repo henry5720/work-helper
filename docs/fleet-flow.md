@@ -6,10 +6,16 @@
 | --- | --- |
 | 誰是誰、誰跟誰交接、你在哪介入 | **這份** |
 | 某條規則當初為什麼這樣定 | [`docs/adr/`](./adr/) |
-| agent 執行用的規則 | [`.claude/skills/fleet-recon`](../.claude/skills/fleet-recon/SKILL.md)（查現況）、[`.claude/skills/fleet-worktree`](../.claude/skills/fleet-worktree/SKILL.md)（實作） |
+| issue／草稿 body 長什麼樣 | **目標 repo 自己的規範**（它的 `CLAUDE.md` 觸發表指過去）。這裡不留第二份 |
+| 接單的機械動作 | `bin/fleet` —— **還沒寫**。在那之前手打，該打什麼見〈現況與待辦〉 |
 | 跑一輪、邊跑邊打勾 | [`fleet-dry-run-checklist.md`](./fleet-dry-run-checklist.md) |
 
 > 實測環境：Herdr 0.8.0、Claude Code 2.1.232、Ubuntu 24.04（WSL2）。
+
+**理由要住在哪，用一個測試決定**：這行理由會改變 **agent 的行為**嗎？會 → 留在 SKILL.md
+（例：「用 `info/exclude` 不用 `.gitignore`」的理由 —— 沒有它，agent 會很聰明地改用 `.gitignore`）。
+只會改變**你的行為** → 住這份或 ADR（例：`merge --no-ff` 為什麼比 ff 好 —— agent 不會自己改成 ff）。
+抄兩份的代價實際發生過：SKILL.md 曾經整段複述 ADR-0004 的論證，而 agent 讀了行為沒有任何差別。
 
 ---
 
@@ -21,7 +27,10 @@
 
 **所以平行的是「把問題準備到可以決策的狀態」，不是實作。** 原本一天只能開始 2 件事，變成一天能對齊 8 件事的決策。複雜的實作還是一件一件來。
 
-系統化實際換到的東西只有一個：**問答從 terminal 搬到 issue 上。** 其他都是這件事的推論。
+系統化實際換到的東西只有一個：**「查現況」從序列變平行，而你的判斷還是序列的。** 其他都是這件事的推論。
+
+⚠️ 這裡原本寫的是「問答從 terminal 搬到 issue 上」。那條**退掉了** —— 對齊改成在 pane 裡直接談，
+只有跨過今天的事才落 issue（見〈交接 3〉與[不變量 3](#三個不變量)）。
 
 ---
 
@@ -134,19 +143,23 @@ flowchart LR
 
 這是最容易掉東西的一個。偵察坐在共用 checkout、實作要在 worktree ⇒ **一定會換 agent**（agent 的 cwd 在 spawn 那一刻就定死，herdr 的 `--cwd` 只在 `pane split`，`pane move` 不改 cwd）。
 
-**偵察每份草稿最後一行會自己標籤，你 review 的其實是那個標籤。** 標錯了你馬上知道它沒搞懂，代價是兩分鐘，不是一個爛 diff。
+**派工那句話裡順便要它在草稿最後一行標一個籤，你 review 的其實是那個標籤。** 標錯了你馬上知道它沒搞懂，代價是兩分鐘，不是一個爛 diff。
+
+⚠️ 這個標籤**沒有 skill 保證**（`fleet-recon` 已刪）—— 你要就講一句，不講就自己讀完草稿判。它省的不是那次閱讀，是**替你把「哪些要在開 issue 前談」先分好堆**：`⚠️ 範圍未定` 決定 slug 顆粒度，而那件事開了 issue 就不可逆。
 
 | 標 | 意思 | 你做什麼 |
 | --- | --- | --- |
 | `✅` | 三格都填滿 | **開 issue ＋ 掛 `ready-for-agent`**（同一個動作，`bin/fleet` 做） |
 | `⚠️ 範圍未定` | 方向會改變**要開幾個任務**或**動到哪些檔案** | **開 issue 前**就要談，談完直接改草稿。此刻還沒有 worktree 可開，就在 backlog 層談 |
-| `⚠️ 做法未定` | 方向只改實作走法，範圍不變 | 帶著空格開 issue。接單後由負責人跟你談，**跟看計畫合併成同一關** |
+| `⚠️ 做法未定` | 方向只改實作走法，範圍不變 | 帶著空格開 issue。接單後由負責人跟你談 —— **跟一般任務同一關**，只是要談的東西多一格 |
 
 **只有「方向」那格可以空。** 現況空了 → 接單的人得重查一遍，偵察白做。怎樣算解完空了 → 接單的人不知道什麼時候算做完，而且這欄會一路流到 PM 驗收（`bin/slack-list ready --verify` 用的是同一份）。
 
 **為什麼要拆兩種：** 「合成一個還是拆兩個」必須在開 issue 那一刻決定，因為 **issue 編號就是 slug**（[不變量 1](#三個不變量)）。接單後才談，slug 已經定死了。
 
-**⚠️ 的任務不接受換 agent。** issue comment 帶得走「選了 A」，帶不走「B 為什麼在第三輪被排除」—— 而後者正是實作撞牆時要用的。所以談完的那個 agent 就是負責人，一路做到底。comment 還是要寫，但它是**給三天後的你和 PM 看的備忘，不是交接文件**。那個 agent 一旦失憶，推導就是真的掉了，要重談。→ [ADR-0007](./adr/0007-align-inside-the-worktree-and-never-hand-off.md)
+**談完的那個 agent 就是負責人，一路做到底。** 推導（「B 為什麼在第三輪被排除」）活在它的 context 裡，而那正是實作撞牆時要用的東西。→ [ADR-0007](./adr/0007-align-inside-the-worktree-and-never-hand-off.md)
+
+⚠️ **真的要換手時，載體是 handoff 檔，不是 issue comment。** comment 帶得走「選了 A」，帶不走推導；handoff 檔是整段對話的壓縮，它帶得走。ADR-0007 原本從「comment 帶不走推導」推到「不換 agent」，那步的隱含前提是「交接載體只能是 comment」—— 前提破了，結論就只剩「**別用 comment 換手**」。→ [ADR-0013](./adr/0013-alignment-replaces-plan-review.md)
 
 **開 issue 前順手看一眼改動範圍有沒有交集。** 三份草稿都要改 `inventory/export.js`，一起開就是三個 worktree 各改各的，merge 時全撞。有交集的：要嘛合成一份，要嘛排隊。**這時候合併不用關掉任何 issue** —— 這正是把開 issue 收到 backlog 層換到的東西。（`bin/fleet` 可以直接算，那欄本來就是機械檢查。）
 
@@ -156,9 +169,24 @@ flowchart LR
 
 一個模組一條長命的整合分支（例如 `fix/inventory`），所有 worktree 從它開、做完 merge 回它，最後由它對 `dev` 開一個 PR。
 
-**接單的 agent 先把計畫 comment 回 issue，然後停**，你批次看完才放行。門檻要低：你看的是「**它有沒有理解對**」，不是「這是最好的做法嗎」。簡單的 3 行、10 秒放行；複雜的 20 行、2 分鐘 —— 成本自動隨複雜度縮放，所以不用挑哪個要審。→ [ADR-0004](./adr/0004-plans-go-into-issue-comments-not-interactive-approval.md)
+**接單的 agent 讀完 issue，白話講幾句它理解的是什麼，然後停在 pane 裡等你。** 不寫 issue comment —— 那份 comment 沒有讀者，你要談的話會直接進去談。`herdr agent list` 裡 **`agent_status` 不是 `working`** 的那幾個就是你的待談清單。
 
-> 這關不能用「issue 已經寫了改動範圍」取代。issue 說的是**改哪些檔案**，計畫說的是**怎麼改**。方向對、範圍對，做法照樣可以歪。
+⚠️ **不要只挑 `idle`。** 接單是 `--no-focus` 起的，tab 沒被看過的話狀態是 `done` 而不是 `idle`（同一個底層狀態，herdr 用它區分「背景做完但你還沒看到」），而 CLI 讀取不會把 tab 標記成看過。只挑 `idle` 會漏掉剛 bootstrap 完的那批。判準看 herdr skill 的狀態定義，不要在這裡重寫一份。
+
+**談完就實作，不用先總結。** 共識活在那個 agent 的 context 裡；它一路做到底、不換手，所以推導不需要載體。→ [ADR-0013](./adr/0013-alignment-replaces-plan-review.md)
+
+要留紀錄的時機只有兩個，而且都是你當場的決定，不是 agent 的步驟：
+
+| 時機 | 載體 |
+| --- | --- |
+| **要換手**（這個 agent 收不掉） | handoff 檔，寫在 worktree 裡並用 `info/exclude` 忽略 —— 不是 `/tmp`（`handoff` skill 的預設會跟著重開機消失） |
+| **跨過今天**（要拆、PM 又補規格、你被叫去開會） | issue comment，連推導一起寫 |
+
+⚠️ **不要預先總結。** 為還沒發生的未來寫摘要，每個任務都在付這個成本，而多數任務兩個時機都不會到。真的到了你講一句它就寫。
+
+> 這關看的是「**它有沒有理解對**」，不是「這是最好的做法嗎」。理解對就放行 —— 簡單的一句話 10 秒過、複雜的談半小時，成本自動隨複雜度縮放，所以不用挑哪個要審。
+>
+> 它不能用「issue 已經寫了改動範圍」取代：issue 說的是**改哪些檔案**，談的是**怎麼改**。方向對、範圍對，做法照樣可以歪。
 
 **兩道關**：agent 自己過測試 / lint / typecheck ＋ `git diff --name-only` 對照範圍，才輪到第二道。
 
@@ -206,17 +234,24 @@ slug ＝ **issue 編號 + 短名**，它同時決定 issue（`#1769`）、branch
 
 ⚠️ **指紋要看得見，不要藏在 HTML 註解裡。** GitHub 搜尋會不會索引註解沒有定論，整套去重就靠 `gh issue list --search "Rec0B…" --state all` 這個查詢。
 
-### 3. 問題要落在 issue 上，不能只落在 terminal 上
+### 3. 要人決定的事，agent 停下來等；跨過今天的才落 issue
 
-遇到要人決定的事 → **寫進 issue** → 然後才停。停不是問題，**問題只印在 terminal 裡才是問題**。
+遇到要人決定的事 → **停**。停在 pane 裡，你在 herdr 看得到（`idle` / `blocked`）。
 
-第一好處是**你可以批次回答**：10 個 agent 在 3 小時內隨機打斷你 10 次是一整天沒了，10 個問題集中回答是 10 分鐘。附帶的是三天後還讀得到 —— terminal 的 compact 一次就蒸發，那不是「翻起來慢」，是東西沒了。
+**問題落在哪裡由一個判準決定：這件事會不會跨過今天。**
 
-⚠️ **`blocked` 是例外，而且它是對的。** 等權限核可沒辦法寫進 issue，agent 就該停在那裡 —— herdr 的 `blocked` / `idle` ＋ `agent wait` 就是為了讓你知道「該你了」。**狀態是通知管道，issue 是問題的存放處**，兩者不衝突。
+| | 落在哪 | 為什麼 |
+| --- | --- | --- |
+| 這一輪談完就做掉 | pane 裡的對話 | 談完就實作，寫下來沒有讀者 |
+| 會跨過今天 | issue comment，連推導一起寫 | compact 一次對話就蒸發，而三天後回頭看只有 issue |
+
+⚠️ **`blocked` 跟 `idle` 都要當「該你了」，只等一個會漏。** `blocked` 是在等權限核可、`idle` 是話講完了。`herdr agent wait --until idle --until blocked` 是給「**做到一半**需要人」用的；接單後的停是確定會發生的，`herdr agent list` 看一眼就夠，不用 wait。
 
 **真的該擋著等你的只有三種**：推 code、開 PR、動到別人的東西（改 Slack 表、關 issue）。**開** issue 不在裡面。
 
-⚠️ **沒有 issue 的那條路（當天做完）不是這條不變量的例外。** 走到「要人決定」就代表它不是當天做完的事了 —— 升級規則會先開 issue，問題再寫進去。兩件事同一個動作。
+⚠️ **這條退掉了「批次回答」那個好處，而那是刻意的。** 原本的設計是計畫全寫進 issue、你坐下來一次看 N 份（[ADR-0004](./adr/0004-plans-go-into-issue-comments-not-interactive-approval.md)）。那張對照表現在讀起來還是對的，它只是輸在另一個代價上：**那些 comment 沒有讀者**，你會直接進去談。
+
+批次其實沒有真的掉 —— 換了形式。接單後的停是**確定的**（bootstrap 完幾秒內），不是隨機打斷，所以 N 個可以全停在那裡等你一個一個談。ADR-0004 怕的是「10 個 agent 在 3 小時內隨機打斷你」，那個風險在這個停點不存在。→ [ADR-0013](./adr/0013-alignment-replaces-plan-review.md)
 
 ---
 
@@ -226,7 +261,7 @@ slug ＝ **issue 編號 + 短名**，它同時決定 issue（`#1769`）、branch
 | --- | --- | --- | --- |
 | **分流** | backlog | 這件事值不值得你花時間 | 30 秒 |
 | **讀草稿** | backlog | 走哪條出口：當天做掉，還是開成任務 | 兩分鐘／份 |
-| **對齊 ＋ 看計畫** | 任務 | 方向挑哪個（只有 ⚠️ 才有）、它有沒有理解對 | 10 秒～談半小時 |
+| **對齊** | 任務 | 它有沒有理解對、方向挑哪個（只有 ⚠️ 才有） | 10 秒～談半小時 |
 | **驗收** | 任務 | 「怎樣算解完」達成了沒 | 一次一件 |
 
 偵察和工人你不介入 —— 那是刻意的。
@@ -255,6 +290,8 @@ slug ＝ **issue 編號 + 短名**，它同時決定 issue（`#1769`）、branch
 > 有數字撐「跑很久就要加檢查點」：2026-07 一份終端任務 benchmark，17 個 frontier model 平均只完成 **6.4%**（最好 28.3%）；長程任務的全自主部署有 **90%** 敗在 goal drift。
 >
 > ⚠️ 但那個 6.4% 量的是「**拿到任務直接自主跑**」。這套流程做的就是換掉輸入 —— 接單拿到的 issue 已經有驗收條件和改動範圍。
+>
+> 對策的方向也有共識（2026 那批 goal drift 研究收斂到同一句）：**目標要外部化到 context window 之外，而且要主動重讀**；drift 的嚴重度跟自主跑的時長正相關。這套裡對應的是 `CLAUDE.local.md` 身分卡（活過 compact）和「issue 是權威、`handoff.md` 只是快照」。
 
 ---
 
@@ -311,11 +348,35 @@ echo 'CLAUDE.local.md' >> "$(git rev-parse --git-common-dir)/info/exclude"
 
 ## 現況與待辦
 
-- **2026-08-18 暫停點：先實測，不先選 orchestrator。** 「總管理」的角色與管轄範圍已定，orchestrator 只是承載這個角色的工具。恢復工作時，先完成 dry-run checklist 的三個硬前置，再用手動 Herdr／原生 subagent 跑一件範圍小、會動到畫面、走 issue 路徑的 `✅` 待辦；拿到流程實測結果後，才用同類任務 A/B orchestrator，避免把流程問題和工具問題混在一起。
+- **2026-08-20：orchestrator 決定不引入，這條結案。** 2026 那批工具（Conductor、Claude Squad、Emdash、Vibe Kanban、Crystal/Nimbalyst、Baton）全在同一層 —— worktree 隔離 ＋ dashboard ＋ agent 生命週期，而 **Herdr 已經在這一層**，換過去是平移不是升級（而且好幾個是 Mac GUI）。缺的不是 orchestrator，是 `bin/fleet`。原本 2026-08-18 排的 A/B 取消。
 - **`bin/fleet` script 還沒寫。** 第一件該包進去的是接單的 bootstrap，不是 spawn —— spawn 手打很快，環境沒起來才是每次都卡住的地方。之後是總管理那些機械動作：讀草稿、查重、`gh issue create --body-file` ＋ 貼 label、算改動範圍交集。
 - **總管理還是手動開 session。** 架構定了，實作還沒。
-- **七個機制還沒驗過**：終止條件、`git status` 守門、`CLAUDE.local.md` 身分卡、執行前看計畫、⚠️ 拆成範圍／做法兩種、偵察改寫草稿、當天做完不開 issue。用 checklist 跑一輪 —— 這是現在最該做的一件事。
-- **orchestrator 工具還沒選。** 兩條路都沒試：`~/.claude/agents/*.md` 自訂角色（零依賴，但 `.claude/` 被 gitignore ⇒ 不能共享），或 `oh-my-opencode-slim`（七角色 ＋ 自動開 pane，Herdr 整合需 0.8.0+）。**先用一個最機械的 ✅ 任務做 A/B**，不要整批換。
+- **六個機制還沒驗過**：終止條件、`git status` 守門、`CLAUDE.local.md` 身分卡、⚠️ 拆成範圍／做法兩種、偵察改寫草稿、當天做完不開 issue。用 checklist 跑一輪 —— 這是現在最該做的一件事。（原本第七個是「執行前看計畫」，已被〈交接 3〉的對齊取代。）
+- **2026-08-20：`fleet-recon` skill 刪掉了。** 逐條套「拿掉這行 agent 會不會做錯」之後殘值是 0：
+  **怎麼查**（grep、fan out、開 subagent）是 agent 的預設能力，寫進 context 反而讓它照做、多繞路；
+  **issue／草稿的格式**在目標 repo 自己的規範裡（`teamsync-frontend/docs/guides/workflow/github-issue-standards.md`
+  開頭明文寫「這份文件是自足的，不需要安裝任何 skill」），抄第二份一定有一份先腐爛；
+  **不開 issue／不改檔案／不實作**在 container 那邊已經寫得更嚴（`work-agent-deploy/agents/CLAUDE.md` 第 3、7、8 行）。
+  最後兩條（一件事一份草稿、`✅`／`⚠️` 標籤）也不成立 —— 前者錯了你一讀就看到，不是安靜的錯；
+  後者不省你那次閱讀，因為要知道標得對不對就得讀草稿，而 `⚠️ 範圍未定` 決定的是 slug 顆粒度，
+  那件事不可逆，不該讓 agent 先幫你分類。
+- **2026-08-20：`fleet-worktree` skill 也刪了，`.claude/skills/` 底下不再有 fleet 的東西。**
+  它的判斷殘值同樣是 0；剩下的是機械動作，而機械動作該進 script 不該用散文教 agent。
+  **舊內容在 git 裡**：`git show 21aac85:.claude/skills/fleet-worktree/SKILL.md`。
+- **`bin/fleet start <issue> --base <整合分支>` 該包這些**（照順序，寫的時候不用回去翻 git）：
+  1. `herdr worktree create --base --branch --label --no-focus`，從回傳 JSON 撈 `pane_id`
+     —— 旗標問 CLI（`herdr worktree`），不要憑記憶
+  2. 裝依賴（`--frozen-lockfile`）—— 沒有它 agent 只能盲寫，測不了
+  3. `gh issue view $ISSUE --comments > .claude/handoff.md`
+  4. 寫 `CLAUDE.local.md` 身分卡：你 own #N、slug 是什麼、**權威是 issue，handoff 只是快照**
+  5. `git check-ignore -v CLAUDE.local.md` 要命中（用 `git rev-parse --git-common-dir`／`info/exclude`
+     一次性設好，不是 `.gitignore` —— 理由見〈要先準備什麼〉）；**不要**複製 `.env.local`
+  6. `herdr agent start "$SLUG" --kind claude --pane $PANE` —— name 必給、小寫、`[a-z][a-z0-9_-]{0,31}`
+  7. 收尾（另一個子指令）：`merge --no-ff` → 整合測試 → 關 issue → **最後才** `worktree remove`；
+     子 branch 不 push；測到問題回原 worktree 改，**不 revert**
+- **checklist 5b 還沒跟上這份。** 這輪 dry-run 正在跑，它量的就是「看計畫那一關」——
+  **跑完、5b 填上結果之後才改**，否則量到的數字兩邊都不算數。
+- **`CONTEXT.md` 要收「對齊」。** 它現在是一個介入點的名字、有 avoid 對象（「看計畫」、「核可」）。
 - **策略層（日記 agent）先不做。** 那層管「你有沒有在做對的事」，等這層跑順再說。
 
 ### 從哪開始
@@ -323,6 +384,6 @@ echo 'CLAUDE.local.md' >> "$(git rev-parse --git-common-dir)/info/exclude"
 **不要一開始就開 10 個，從 2–3 個開始。你的瓶頸不是 agent 的速度，是你自己審核的速度。**
 
 1. 先把〈要先準備什麼〉那三個前置做完
-2. 拿一件真的待辦，叫 `fleet-recon` 跑一次，看任務產得對不對
+2. 拿一件真的待辦，派幾個 subagent 平行查一次，看草稿產得對不對
 3. 把 `✅` / `⚠️` 的判準調到你信得過 ← **這步最值錢**
 4. 才寫 script 把 spawn 自動化
