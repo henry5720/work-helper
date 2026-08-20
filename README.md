@@ -27,9 +27,16 @@ CONTEXT.md              這條線上會混淆的詞（待辦列、任務、草�
 bin/sync-skills
 ```
 
-它把 `skills/` 底下每個有 `SKILL.md` 的資料夾拉線到**兩個地方** ——
+它把 `.claude/skills/` 底下每個有 `SKILL.md` 的資料夾拉線到**兩個地方** ——
 `~/.agents/skills/`（工具中立層，opencode 讀這裡）和 `~/.claude/skills/`（Claude Code 讀這裡），
 順便清掉指向這個 repo、但來源已經刪掉的死連結。可以重複跑。
+
+目標位置已經有**實體目錄**（`npx skills` 全域裝的同名 skill）時它不會覆蓋，
+而是比對內容：一樣就印 `same` 放過，不一樣印 `DRIFT` 並以非零結束。
+第三方 skill 有兩份是設計 —— repo 那份給 work-agent-deploy 的 container 讀
+（`compose.yaml` 只 mount `.claude/skills`），全域那份給別的 repo，
+分別用 `npx skills update -p` 和 `-g` 更新；**內容跑掉**才是問題，
+那會讓本機和 bot 跑到不同版本（見 `docs/adr/0011-...`）。
 
 **新增或改名 skill 之後要再跑一次** —— 拉線是一次性的，`git pull` 只更新內容，
 不會替新資料夾建連結。
