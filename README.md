@@ -156,6 +156,14 @@ bin/slack-list draft Rec0B… \
   --requested-by U0B…
 ```
 
+backlog agent 交付 `/home/node/drafts` 下的 prototype／artifact 請走專用的 `artifact` 入口（完整規矩見
+[slack-list skill](.claude/skills/slack-list/SKILL.md)），不要用 `draft` 代替。它只接受 resolve 後仍在該目錄
+下的 regular file 與白名單副檔名（`.html`、`.md`、`.css`、`.js`、`.json`、`.png`、`.zip`）；會附到既有
+item 留言串，不 @ 人、不改狀態或 List 檔案欄。大檔案會整份讀進記憶體再上傳，這是明確取捨。需要
+`files:write`、`chat:write` 與既有
+讀取留言串的 scopes（目前私有 channel 使用 `groups:read`、`groups:history`）；scope 有變更時要重新
+Install app，並使用 token rotation 後的新 token。
+
 `--report` 是一份 md，整份當訊息本體發出去，模板固定四段 —— 改了什麼／⚠️ 要先知道的事（有才寫）
 ／怎麼驗收／QA case。範本是 `.claude/skills/slack-list/report-template.md`，缺段就不准發。
 表格靠 Slack 的 `markdown` block 送，Slack 會在伺服器端把它拆成原生 blocks（`## 標題` 變

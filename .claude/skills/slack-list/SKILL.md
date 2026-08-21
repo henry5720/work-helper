@@ -284,6 +284,34 @@ Slack 在建列時就替每一列開好串了，腳本只查既有串、不另�
 
 沒有任何刪除指令。要撤回已發的訊息，跟使用者說，讓他自己刪。
 
+### 交付 prototype／artifact
+
+backlog agent 要把 `/home/node/drafts` 下的 prototype 或其他交付物交給 PM 時，使用專用的
+`artifact` 指令，交付到該列**既有的原生 item 留言串**：
+
+```bash
+./bin/slack-list artifact Rec0B… \
+  --file /home/node/drafts/<日期>/<檔名> \
+  --kind prototype \
+  --summary "可操作的庫存匯出 prototype"
+```
+
+這不是 `draft` 的別名，**不要拿 `draft` 交 prototype／artifact，也不要拿 `artifact` 交 issue body**。
+`draft` 保留「完整 Markdown issue body + GitHub 查重／建立連結」的人工發布流程；prototype／artifact
+只用 `artifact`。
+
+安全限制由腳本強制：`--file` resolve 後必須仍在 `/home/node/drafts` 底下，原路徑是 symlink、directory
+或其他非 regular file 都會拒絕；副檔名白名單是 `.html`、`.md`、`.css`、`.js`、`.json`、`.png`、`.zip`
+（不分大小寫）。成功只在 item 留言串附檔並發一則不含 `@` 的簡短訊息，不改狀態，也不寫 List 的「檔案」欄。
+artifact 不設單檔大小上限，大檔案會整份讀進記憶體再上傳；這是明確取捨。
+
+上傳或 complete 失敗時不會發訊息。若訊息發送失敗，附件可能已經上傳；先檢查 item 留言串，**不要直接重試**，
+避免重複附件。
+
+這條流程的 external dependency scopes 是 `files:write`、`chat:write`，以及查找既有 item 留言串沿用的讀取
+scopes（目前私有 channel 使用 `groups:read`、`groups:history`）。新增或調整 scope 後必須重新 Install app，
+並使用 rotation 後的新 token；不要拿舊 token 直接重試。
+
 ### 驗收報告固定四段
 
 `--report` 吃一份 md，整份就是 Slack 訊息本體。**照 [`report-template.md`](report-template.md) 寫**，

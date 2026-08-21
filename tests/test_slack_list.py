@@ -550,6 +550,227 @@ class SlackListTest(unittest.TestCase):
         self.assertIn("https://create", payload["text"])
         self.assertIn("不會建立 GitHub issue", payload["text"])
 
+    def artifact_path(self, name="prototype.html", content=b"<p>demo</p>"):
+        path = Path(self.tmp.name) / name
+        path.write_bytes(content)
+        return path
+
+    def assert_artifact_rejected(self, path, expected):
+        with patch.object(slack_list, "ARTIFACT_DRAFTS_ROOT", Path(self.tmp.name)), \
+                patch.object(slack_list, "config") as config, \
+                redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(SystemExit):
+                slack_list.cmd_artifact([
+                    "RecA", "--file", str(path), "--kind", "artifact",
+                    "--summary", "測試交付",
+                ])
+        self.assertIn(expected, errors.getvalue())
+        config.assert_not_called()
+
+    @patch.object(slack_list, "api")
+    @patch.object(slack_list, "api_get")
+    @patch.object(slack_list.urllib.request, "urlopen")
+    @patch.object(slack_list, "item_thread_ts", return_value="1.2")
+    @patch.object(slack_list, "config", return_value=("token", "F123"))
+    @patch.object(slack_list, "upload_md")
+    def test_artifact_uploads_then_posts_to_the_record_item_thread(
+        self, upload_md, config, item_thread_ts, urlopen, api_get, api
+    ):
+        path = self.artifact_path()
+        api_get.return_value = {
+            "upload_url": "https://uploads.example.test/file",
+            "file_id": "F123FILE",
+        }
+        upload_response = MagicMock()
+        upload_response.__enter__.return_value.read.return_value = b""
+        urlopen.return_value = upload_response
+        api.side_effect = [{}, {}]
+
+        output = io.StringIO()
+        with patch.object(slack_list, "ARTIFACT_DRAFTS_ROOT", Path(self.tmp.name)), \
+                patch.object(Path, "read_bytes", side_effect=AssertionError("artifact must not reread path")), \
+                redirect_stdout(output):
+            slack_list.cmd_artifact([
+                "RecA", "--file", str(path), "--kind", "prototype",
+                "--summary", "可操作 prototype",
+            ])
+
+        config.assert_called_once_with()
+        item_thread_ts.assert_called_once_with("token", "F123", "RecA")
+        upload_md.assert_not_called()
+        api_get.assert_called_once_with(
+            "files.getUploadURLExternal",
+            {"filename": "prototype.html", "length": str(path.stat().st_size)},
+            "token",
+        )
+        upload_request = urlopen.call_args.args[0]
+        self.assertEqual(upload_request.full_url, "https://uploads.example.test/file")
+        self.assertEqual(api.call_args_list[0].args, (
+            "files.completeUploadExternal",
+            {
+                "files": [{"id": "F123FILE", "title": "prototype"}],
+                "channel_id": "C123",
+                "thread_ts": "1.2",
+            },
+            "token",
+        ))
+        method, payload, token = api.call_args_list[1].args
+        self.assertEqual(method, "chat.postMessage")
+        self.assertEqual(token, "token")
+        self.assertEqual(payload["channel"], "C123")
+        self.assertEqual(payload["thread_ts"], "1.2")
+        self.assertIn("prototype", payload["text"])
+        self.assertIn("prototype.html", payload["text"])
+        self.assertIn("可操作 prototype", payload["text"])
+        self.assertIn("附件已附上", payload["text"])
+        self.assertNotIn("<@", payload["text"])
+        self.assertIn("artifact 已交付", output.getvalue())
+
+    def test_artifact_rejects_file_outside_drafts(self):
+        with tempfile.TemporaryDirectory() as outside:
+            path = Path(outside) / "outside.html"
+            path.write_text("outside", encoding="utf-8")
+            self.assert_artifact_rejected(path, str(Path(self.tmp.name)))
+
+    def test_artifact_rejects_symlink(self):
+        target = self.artifact_path("target.html")
+        link = Path(self.tmp.name) / "link.html"
+        link.symlink_to(target)
+        self.assert_artifact_rejected(link, "symlink")
+
+    def test_artifact_rejects_directory(self):
+        path = Path(self.tmp.name) / "directory.html"
+        path.mkdir()
+        self.assert_artifact_rejected(path, "regular file")
+
+    def test_artifact_rejects_unknown_extension(self):
+        path = self.artifact_path("prototype.exe")
+        self.assert_artifact_rejected(path, "副檔名")
+
+    def test_artifact_walks_directories_with_nofollow_flags_and_closes_fds(self):
+        root = Path(self.tmp.name) / "drafts"
+        nested = root / "nested" / "deep"
+        nested.mkdir(parents=True)
+        path = nested / "prototype.html"
+        path.write_bytes(b"safe")
+        calls = []
+        opened_fds = []
+        real_open = slack_list.os.open
+
+        def capture_open(path_arg, flags, *args, **kwargs):
+            fd = real_open(path_arg, flags, *args, **kwargs)
+            calls.append((path_arg, flags, kwargs.get("dir_fd")))
+            opened_fds.append(fd)
+            return fd
+
+        with patch.object(slack_list, "ARTIFACT_DRAFTS_ROOT", root), \
+                patch.object(slack_list.os, "open", side_effect=capture_open):
+            resolved, data = slack_list.artifact_file(path)
+
+        self.assertEqual(resolved, path.resolve())
+        self.assertEqual(data, b"safe")
+        self.assertEqual(len(calls), 4)
+        root_flags = slack_list.os.O_RDONLY | slack_list.os.O_DIRECTORY | slack_list.os.O_NOFOLLOW
+        self.assertEqual(calls[0], (root.resolve(), root_flags, None))
+        for path_arg, flags, dir_fd in calls[1:3]:
+            self.assertIn(path_arg, ("nested", "deep"))
+            self.assertEqual(flags, root_flags)
+            self.assertIsNotNone(dir_fd)
+        self.assertEqual(calls[3][0], "prototype.html")
+        self.assertEqual(calls[3][1], slack_list.os.O_RDONLY | slack_list.os.O_NOFOLLOW)
+        self.assertIsNotNone(calls[3][2])
+        for fd in opened_fds:
+            with self.assertRaises(OSError):
+                os.fstat(fd)
+
+    def test_artifact_fails_closed_without_required_open_flags(self):
+        path = self.artifact_path()
+        for flag_name in ("O_NOFOLLOW", "O_DIRECTORY"):
+            with self.subTest(flag_name=flag_name), \
+                    patch.object(slack_list, "ARTIFACT_DRAFTS_ROOT", Path(self.tmp.name)), \
+                    patch.object(slack_list.os, flag_name, 0), \
+                    patch.object(slack_list.os, "open") as open_call, \
+                    redirect_stderr(io.StringIO()) as errors:
+                with self.assertRaises(SystemExit):
+                    slack_list.artifact_file(path)
+            open_call.assert_not_called()
+            self.assertIn("O_NOFOLLOW 或 O_DIRECTORY", errors.getvalue())
+
+    @patch.object(slack_list, "api")
+    @patch.object(slack_list, "api_get")
+    @patch.object(slack_list.urllib.request, "urlopen")
+    @patch.object(slack_list, "item_thread_ts", return_value="1.2")
+    @patch.object(slack_list, "config", return_value=("token", "F123"))
+    def test_artifact_upload_failure_does_not_post(
+        self, config, item_thread_ts, urlopen, api_get, api
+    ):
+        path = self.artifact_path()
+        api_get.return_value = {"upload_url": "https://uploads.example.test/file", "file_id": "F1"}
+        urlopen.side_effect = slack_list.urllib.error.URLError("upload timeout")
+
+        with patch.object(slack_list, "ARTIFACT_DRAFTS_ROOT", Path(self.tmp.name)), \
+                redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(SystemExit):
+                slack_list.cmd_artifact([
+                    "RecA", "--file", str(path), "--kind", "artifact", "--summary", "失敗測試",
+                ])
+
+        api.assert_not_called()
+        self.assertIn("檔案上傳失敗", errors.getvalue())
+
+    @patch.object(slack_list, "api")
+    @patch.object(slack_list, "api_get")
+    @patch.object(slack_list.urllib.request, "urlopen")
+    @patch.object(slack_list, "item_thread_ts", return_value="1.2")
+    @patch.object(slack_list, "config", return_value=("token", "F123"))
+    def test_artifact_complete_failure_does_not_post(
+        self, config, item_thread_ts, urlopen, api_get, api
+    ):
+        path = self.artifact_path()
+        api_get.return_value = {"upload_url": "https://uploads.example.test/file", "file_id": "F1"}
+        upload_response = MagicMock()
+        upload_response.__enter__.return_value.read.return_value = b""
+        urlopen.return_value = upload_response
+        api.side_effect = SystemExit(1)
+
+        with patch.object(slack_list, "ARTIFACT_DRAFTS_ROOT", Path(self.tmp.name)), \
+                redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                slack_list.cmd_artifact([
+                    "RecA", "--file", str(path), "--kind", "artifact", "--summary", "失敗測試",
+                ])
+
+        api.assert_called_once()
+        self.assertEqual(api.call_args.args[0], "files.completeUploadExternal")
+
+    @patch.object(slack_list, "api")
+    @patch.object(slack_list, "api_get")
+    @patch.object(slack_list.urllib.request, "urlopen")
+    @patch.object(slack_list, "item_thread_ts", return_value="1.2")
+    @patch.object(slack_list, "config", return_value=("token", "F123"))
+    def test_artifact_post_failure_warns_attachment_may_exist_and_not_to_retry(
+        self, config, item_thread_ts, urlopen, api_get, api
+    ):
+        path = self.artifact_path()
+        api_get.return_value = {"upload_url": "https://uploads.example.test/file", "file_id": "F1"}
+        upload_response = MagicMock()
+        upload_response.__enter__.return_value.read.return_value = b""
+        urlopen.return_value = upload_response
+        api.side_effect = [{}, SystemExit(1)]
+
+        with patch.object(slack_list, "ARTIFACT_DRAFTS_ROOT", Path(self.tmp.name)), \
+                redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(SystemExit):
+                slack_list.cmd_artifact([
+                    "RecA", "--file", str(path), "--kind", "artifact", "--summary", "失敗測試",
+                ])
+
+        self.assertEqual(api.call_count, 2)
+        message = errors.getvalue()
+        self.assertIn("附件可能已上傳", message)
+        self.assertIn("先檢查 item 留言串", message)
+        self.assertIn("勿直接重試", message)
+
     def test_check_url_rejects_non_http_scheme(self):
         with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as err:
             slack_list.check_url("ftp://example.com")

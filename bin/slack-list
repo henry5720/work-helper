@@ -23,6 +23,7 @@ import http.client
 import json
 import os
 import re
+import stat
 import sys
 import time
 import urllib.error
@@ -64,6 +65,13 @@ CELL_LIMIT = 120
 # 一則訊息裡所有 markdown block 合計的字數上限，Slack 的規格。
 # 破了就改用 --md 當附件（附件沒有這個限制）。
 MARKDOWN_LIMIT = 12000
+
+# artifact 是給 backlog agent 交付 prototype／產物的窄入口，不是任意檔案上傳器。
+# 路徑與白名單集中在常數，測試可以換成 temporary directory。
+ARTIFACT_DRAFTS_ROOT = Path("/home/node/drafts")
+ARTIFACT_ALLOWED_EXTENSIONS = frozenset({
+    ".html", ".md", ".css", ".js", ".json", ".png", ".zip",
+})
 
 # check_url 一定要自報名號。urllib 的預設 UA 是 Python-urllib/3.x，Cloudflare 的
 # bot 規則會直接擋掉 —— 而分支預覽就掛在 Cloudflare Pages 上。實測同一個網址：
@@ -693,10 +701,95 @@ def upload_md(token, channel, thread_ts, path):
                                  headers={"Content-Type": "application/octet-stream"})
     try:
         urllib.request.urlopen(req, timeout=60).read()
-    except urllib.error.URLError as e:
-        die(f"檔案上傳失敗：{e.reason}")
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+        die(f"檔案上傳失敗：{getattr(e, 'reason', e)}")
     api("files.completeUploadExternal", {
         "files": [{"id": slot["file_id"], "title": p.stem}],
+        "channel_id": channel, "thread_ts": thread_ts,
+    }, token)
+    return slot["file_id"]
+
+
+def artifact_file(path):
+    """驗證並從安全開啟的 fd 讀取 artifact，回傳 (路徑, bytes)。"""
+    candidate = Path(path)
+    if candidate.is_symlink():
+        die(f"artifact 不接受 symlink：{candidate}")
+
+    try:
+        resolved = candidate.resolve()
+    except OSError as exc:
+        die(f"無法 resolve artifact 路徑 {candidate}：{exc}")
+
+    try:
+        resolved.relative_to(ARTIFACT_DRAFTS_ROOT.resolve())
+    except ValueError:
+        die(f"artifact 檔案必須在 {ARTIFACT_DRAFTS_ROOT} 底下：{candidate}")
+
+    suffix = resolved.suffix.lower()
+    if suffix not in ARTIFACT_ALLOWED_EXTENSIONS:
+        allowed = "、".join(sorted(ARTIFACT_ALLOWED_EXTENSIONS))
+        die(f"artifact 副檔名不受支援：{suffix or '(無)'}；可接受：{allowed}")
+
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if not nofollow or not directory:
+        die("系統缺少 artifact 安全讀取需要的 O_NOFOLLOW 或 O_DIRECTORY；已拒絕操作")
+
+    root = ARTIFACT_DRAFTS_ROOT.resolve()
+    relative = resolved.relative_to(root)
+    if not relative.parts:
+        die(f"artifact 必須是 regular file，不接受 directory 或其他檔案：{candidate}")
+
+    directory_fds = []
+    fd = None
+    try:
+        # 從 root fd 往下逐段走，避免 resolve 後任何父目錄被換成 symlink。
+        current_fd = os.open(root, os.O_RDONLY | directory | nofollow)
+        directory_fds.append(current_fd)
+        for component in relative.parts[:-1]:
+            current_fd = os.open(
+                component, os.O_RDONLY | directory | nofollow, dir_fd=current_fd)
+            directory_fds.append(current_fd)
+
+        # 最終檔名也禁止 symlink；之後只從這個 fd 讀，不再走 mutable path。
+        fd = os.open(relative.parts[-1], os.O_RDONLY | nofollow, dir_fd=current_fd)
+        file_stat = os.fstat(fd)
+        if not stat.S_ISREG(file_stat.st_mode):
+            die(f"artifact 必須是 regular file，不接受 directory 或其他檔案：{candidate}")
+
+        with os.fdopen(fd, "rb") as source:
+            fd = None
+            # 明確取捨：artifact 不設大小上限，整份 bytes 讀進記憶體再上傳。
+            data = source.read()
+    except FileNotFoundError:
+        die(f"找不到 artifact 檔案：{candidate}")
+    except OSError as exc:
+        die(f"無法安全開啟 artifact 檔案 {candidate}：{exc}")
+    finally:
+        if fd is not None:
+            os.close(fd)
+        for directory_fd in reversed(directory_fds):
+            os.close(directory_fd)
+
+    return resolved, data
+
+
+def upload_bytes(token, channel, thread_ts, filename, data):
+    """用既有 external upload 流程上傳已讀取的 bytes，不重新走檔案路徑。"""
+    slot = api_get("files.getUploadURLExternal", {
+        "filename": filename,
+        "length": str(len(data)),
+    }, token)
+    req = urllib.request.Request(
+        slot["upload_url"], data=data,
+        headers={"Content-Type": "application/octet-stream"})
+    try:
+        urllib.request.urlopen(req, timeout=60).read()
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+        die(f"檔案上傳失敗：{getattr(e, 'reason', e)}")
+    api("files.completeUploadExternal", {
+        "files": [{"id": slot["file_id"], "title": Path(filename).stem}],
         "channel_id": channel, "thread_ts": thread_ts,
     }, token)
     return slot["file_id"]
@@ -1367,6 +1460,50 @@ def cmd_draft(argv):
     print(create_url)
 
 
+def cmd_artifact(argv):
+    """把 prototype／artifact 交付到既有 item 留言串；不改狀態或檔案欄。"""
+    ap = argparse.ArgumentParser(
+        prog="slack-list artifact",
+        description="把 /home/node/drafts 下的 prototype 或 artifact 附到既有 item 留言串。")
+    ap.add_argument("record_id", help="表上那一列的 ID（Rec… 開頭）")
+    ap.add_argument("--file", required=True, metavar="PATH",
+                    help="/home/node/drafts 下的檔案；只接受白名單副檔名")
+    ap.add_argument("--kind", required=True, choices=("prototype", "artifact"),
+                    help="交付物種類")
+    ap.add_argument("--summary", required=True, help="給 PM 的簡短摘要")
+    args = ap.parse_args(argv)
+
+    path, data = artifact_file(args.file)
+    if not args.summary.strip():
+        die("--summary 不能是空白")
+
+    token, list_id = config()
+    channel = comment_channel(list_id)
+    # 只接受 record_id，channel/thread 一律由 List 的原生 item thread 查出來。
+    ts = item_thread_ts(token, list_id, args.record_id)
+    upload_bytes(token, channel, ts, path.name, data)
+
+    # summary／檔名是使用者輸入；把 `<` escape 掉，避免內容本身被 Slack 當成 mention。
+    safe_name = path.name.replace("<", "&lt;")
+    safe_summary = args.summary.strip().replace("<", "&lt;")
+    text = (f"交付 {args.kind}：{safe_name}\n"
+            f"摘要：{safe_summary}\n"
+            "附件已附上。")
+    try:
+        api("chat.postMessage", {
+            "channel": channel,
+            "thread_ts": ts,
+            "text": text,
+        }, token)
+    except SystemExit:
+        die("交付訊息發送失敗；附件可能已上傳。先檢查 item 留言串，勿直接重試，以免重複附件。")
+    except Exception as exc:
+        die(f"交付訊息發送失敗（{exc}）；附件可能已上傳。先檢查 item 留言串，勿直接重試，以免重複附件。")
+
+    print(f"artifact 已交付：{path.name}")
+    print(deep_link(list_id, args.record_id))
+
+
 def thread_messages(token, channel, ts):
     """一條串的全部訊息（含主訊息），自動翻頁。"""
     out, cursor = [], None
@@ -1623,6 +1760,7 @@ WRITE_COMMANDS = {
     "reporter": (cmd_reporter, "設定、恢復或取消一列的回報對象"),
     "progress": (cmd_progress, "回一句進度到該列的 item 留言串，不吵人"),
     "draft": (cmd_draft, "交付 issue 草稿附件與人工發布連結，不改狀態"),
+    "artifact": (cmd_artifact, "交付 prototype／artifact 附件到既有 item 留言串"),
     "ready": (cmd_ready, f"通知可以驗收 + 狀態改成「{STATUS_READY}」"),
 }
 
