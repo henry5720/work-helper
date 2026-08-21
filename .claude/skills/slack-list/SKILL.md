@@ -228,8 +228,8 @@ gh issue list --search "Rec0B…" --state all
 issue 格式走 `~/code/teamsync-frontend` 的
 `docs/guides/workflow/github-issue-standards.md`
 與 `docs/agents/issue-tracker.md`（`gh issue create --type` 是必要的），
-規格不足的掛 `needs-triage`。整套工作流見
-`~/code/work-docs/docs/ai/herdr/agent-fleet-workflow.md`。
+規格不足的掛 `needs-triage`。整套 Fleet 工作流唯一正本見
+[`docs/fleet-flow.md`](../../../docs/fleet-flow.md)。
 
 ---
 

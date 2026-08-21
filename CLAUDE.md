@@ -29,10 +29,6 @@
   兩份清單一定會有一份先腐爛。
 - **不要把只有某台機器成立的路徑寫進工具或 skill。** `~/code`、`~/code/work-docs` 這種是
   個人習慣，不是前提；預設值要對別人也成立，需要縮小範圍讓使用者自己給。
-- **這裡的 skill 有第二個消費端。** `work-agent-deploy` 把整個 `.claude/skills/` read-only
-  mount 進 Slack backlog agent 的 container。改 skill 前先想 container 裡成不成立
-  （那裡沒有 `gh`、沒有 GitHub credential、沒有 git 身分、repo 全部唯讀）；
-  不成立就在那支 skill 裡寫明，或讓 `work-agent-deploy/agents/CLAUDE.md` 擋掉它。
 - 不提交 token、`.env`、`drafts/` 底下的草稿。
 - 沒有使用者明確要求，不 commit、不 push。
 

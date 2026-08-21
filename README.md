@@ -31,10 +31,9 @@ bin/sync-skills
 
 目標位置已經有**實體目錄**（`npx skills` 全域裝的同名 skill）時它不會覆蓋，
 而是比對內容：一樣就印 `same` 放過，不一樣印 `DRIFT` 並以非零結束。
-第三方 skill 有兩份是設計 —— repo 那份給 work-agent-deploy 的 container 讀
-（`compose.yaml` 只 mount `.claude/skills`），全域那份給別的 repo，
-分別用 `npx skills update -p` 和 `-g` 更新；**內容跑掉**才是問題，
-那會讓本機和 bot 跑到不同版本（見 `docs/adr/0011-...`）。
+第三方 skill 有兩份是設計 —— repo 那份與全域那份分別用
+`npx skills update -p` 和 `-g` 更新；**內容跑掉**才是問題，
+那會讓不同 agent 跑到不同版本（見 `docs/adr/0011-...`）。
 
 **新增或改名 skill 之後要再跑一次** —— 拉線是一次性的，`git pull` 只更新內容，
 不會替新資料夾建連結。

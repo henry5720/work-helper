@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 把 .claude/skills/ 底下每個資料夾拉線到 agent 讀得到的兩個位置。
-# 這些連結是讓這些 skill 在「別的 repo」也叫得到（personal level）；
+# 這些連結是讓這些 skill 在 personal level 也叫得到；
 # 只在 work-helper 裡工作的話 project level 就夠了，不需要跑這支。
 # 可以重複跑：已存在的連結會被覆蓋，指向這個 repo 但來源已刪的死連結會被清掉。
 set -euo pipefail
@@ -32,11 +32,11 @@ for t in "${targets[@]}"; do
     #
     # 第三方 skill 本來就會有兩份，這是設計不是漏的：global 的
     # ~/.agents/.skill-lock.json 和這個 repo 的 skills-lock.json 各記一份，各自用
-    # `npx skills update -g` / `-p` 更新。repo 那份是給 work-agent-deploy 的
-    # container（compose.yaml 只 mount .claude/skills，連結指到 repo 外面在裡面是斷的），
-    # 拿掉它 bot 就沒 skill 可讀。刪掉 global 那份也沒用，lock 還記著，下次全域更新會寫回來。
+    # `npx skills update -g` / `-p` 更新。repo 內的 skill 要保留成實體內容，
+    # 不要改成指向 repo 外的 symlink：只攜帶這個目錄的執行環境會讀不到目標。
+    # 刪掉 global 那份也沒用，lock 還記著，下次全域更新會寫回來。
     #
-    # 所以共存不叫錯，只有兩份內容不一樣才是 ADR 0011 講的問題：本機和 bot 跑到不同版本。
+    # 所以共存不叫錯，只有兩份內容不一樣才是 ADR 0011 講的問題：不同 agent 跑到不同版本。
     if [ -d "$t/$n" ] && [ ! -L "$t/$n" ]; then
       if diff -rq "${s%/}" "$t/$n" >/dev/null 2>&1; then
         echo "same    $t/$n（實體目錄，內容跟這個 repo 一樣，不動）"
