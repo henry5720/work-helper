@@ -6,15 +6,14 @@ description: 讀寫 Slack「Bug/需求總表」上的待辦，並在該列的留
 # PM 的待辦表
 
 PM（chieh）與授權使用者把 bug 與需求記在 Slack 的一張 List：**Bug/需求總表**。
-讀它、看懂它、把處理進度回報回去，都走 `~/code/work-helper/bin/slack-list`。
+讀它、看懂它、把處理進度回報回去，都走 container 裡掛載的 `work-helper/bin/slack-list`。
 
 **不要自己組 curl，也不要用 Slack MCP 做這件事。** 腳本已經處理翻頁、
 錯誤翻譯、欄位對應、討論串對應。繞過它就是重寫一次，而且會寫錯。
 
-> 📁 **路徑假設**：這份文件裡的 `~/code/xxx` 假設所有 repo 都是 `~/code/` 底下的兄弟目錄
-> （`work-helper`、`teamsync-frontend`、`teamsync-backend`、`work-docs`）。
-> **這台機器不是這樣擺的話，`ls ~/code` 看一眼；還是找不到就問使用者，不要猜。**
-> 換過機器（例如手機的 Termux）路徑一定不一樣。
+> 📁 **container 路徑**：不要假設 `~/code` 或 host 的家目錄存在。先使用 deployment 提供的
+> `WORK_HELPER_ROOT`；若沒有，就在已掛載的 work-helper repo 根目錄執行下面的 `./bin/slack-list`。
+> 其他 repo 也只使用 runtime 明確提供的絕對路徑，不要自行猜 host/container 對應位置。
 
 ---
 
@@ -35,7 +34,7 @@ PM（chieh）與授權使用者把 bug 與需求記在 Slack 的一張 List：**
 ## 📋 讀
 
 ```bash
-cd ~/code/work-helper
+cd "${WORK_HELPER_ROOT:-.}"  # deployment 已提供時；否則先在 work-helper repo 根目錄執行
 ./bin/slack-list rows                      # 一行一列，只印未完成
 ./bin/slack-list rows 庫存                  # 關鍵字比對整列文字，不分欄位
 ./bin/slack-list rows --assignee U0B…       # 指派給某人
@@ -100,8 +99,9 @@ cd ~/code/work-helper
 跑不動時先 `./bin/slack-list env`（確認 `.env` 讀到了）再 `count`（確認通得到）。
 `.env` 沒設定會直接報哪個變數缺，照 `work-helper/README.md` 設定。
 
-OpenAB 每則訊息會附 `openab.sender.v1` JSON。人在 item 留言串直接 `@bot` 時，用裡面的
-`channel_id` 和 `thread_id` 反查待辦列，不要叫人再貼 record ID：
+OpenAB 每則訊息會附 `openab.sender.v1` JSON。只有當 runtime context 指向這張 List 的原生
+item 留言串時，才用裡面的 `channel_id` 和 `thread_id` 反查待辦列；這不是任意 OpenAB thread
+讀取器，也不會把一般 channel/DM 當成待辦列：
 
 ```bash
 ./bin/slack-list context --channel <channel_id> --thread-ts <thread_id>
@@ -225,7 +225,7 @@ gh issue list --search "Rec0B…" --state all
 工具不存副本 —— 存了就是養一份會過期的東西（見
 `docs/adr/0001-report-into-the-native-item-comment-thread.md`）。
 
-issue 格式走 `~/code/teamsync-frontend` 的
+issue 格式走 runtime 明確提供的目標 repo（例如 mounted 的 `teamsync-frontend`）的
 `docs/guides/workflow/github-issue-standards.md`
 與 `docs/agents/issue-tracker.md`（`gh issue create --type` 是必要的），
 規格不足的掛 `needs-triage`。整套 Fleet 工作流唯一正本見
@@ -286,8 +286,10 @@ Slack 在建列時就替每一列開好串了，腳本只查既有串、不另�
 
 ### 交付 prototype／artifact
 
-backlog agent 要把 `/home/node/drafts` 下的 prototype 或其他交付物交給 PM 時，使用專用的
-`artifact` 指令，交付到該列**既有的原生 item 留言串**：
+backlog agent 要把 container `/home/node/drafts` 下的 prototype 或其他交付物交給 PM 時，使用
+專用的 `artifact` 指令，交付到該列**既有的原生 item 留言串**。這不是任意 channel 的檔案
+上傳器：`record_id` 必須來自原 Slack item/runtime context，工具會自己查回正確的 thread 與
+channel。
 
 ```bash
 ./bin/slack-list artifact Rec0B… \
@@ -302,8 +304,25 @@ backlog agent 要把 `/home/node/drafts` 下的 prototype 或其他交付物交�
 
 安全限制由腳本強制：`--file` resolve 後必須仍在 `/home/node/drafts` 底下，原路徑是 symlink、directory
 或其他非 regular file 都會拒絕；副檔名白名單是 `.html`、`.md`、`.css`、`.js`、`.json`、`.png`、`.zip`
-（不分大小寫）。成功只在 item 留言串附檔並發一則不含 `@` 的簡短訊息，不改狀態，也不寫 List 的「檔案」欄。
-artifact 不設單檔大小上限，大檔案會整份讀進記憶體再上傳；這是明確取捨。
+（不分大小寫）。單檔上限是 10 MiB；工具會先對安全 fd 做 `fstat`，再以 stream 讀取並再次
+檢查上限。成功只在原 item 留言串附檔並發一則不含 `@` 的簡短訊息，不改狀態，也不寫 List
+的「檔案」欄。
+
+不要把 artifact 交到 DM、一般 channel 或新開的 thread。若 runtime 沒有原 Slack item 的
+`record_id`/thread context，不能保證回到原 thread；先回報這項 deployment 限制，不要猜 channel。
+
+預設 local CLI 保留上述副檔名白名單。remote runtime 要明確加 `--remote`，只接受 `.png`、`.md`、
+`.html`；`.html` 還必須由呼叫者加 `--html`。成功完成 upload 與 thread 訊息後，工具會刪除
+來源 regular file；upload、complete 或 post 任一步失敗都保留來源，避免無法重試或查證。
+
+container cron／entrypoint 可呼叫：
+
+```bash
+./bin/slack-list cleanup
+```
+
+它只刪除 `/home/node/drafts` 內超過或正好 24 小時的 regular artifact，不追 symlink，也不會
+掃描 root 以外的檔案。
 
 上傳或 complete 失敗時不會發訊息。若訊息發送失敗，附件可能已經上傳；先檢查 item 留言串，**不要直接重試**，
 避免重複附件。
@@ -373,7 +392,7 @@ Slack UI 上那個中文欄位名**，不是 `Col0B8…` 這種內部 id。常�
 - **名稱前綴（`T` / `V` / `S` / `D` / `B` + 數字）是某種模組代號，但對應關係還沒確認。**
   不要憑字面猜它對到哪個模組，要用就先問使用者。
 - **`狀態` 是多選，而且前端後端分開** —— 一件事可能同時牽涉
-  `~/code/teamsync-frontend` 和 `~/code/teamsync-backend`。只看前端會漏。
+  `teamsync-frontend` 和 `teamsync-backend`。實際路徑以 runtime 提供的 mounted repo 為準；只看前端會漏。
 
 ---
 

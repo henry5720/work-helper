@@ -5,7 +5,23 @@
 產出給主管看的工作日誌，不碰 Slack。下面是這兩條線上會混淆的詞 —— 混淆的代價實際發生過，
 見 `docs/adr/`。
 
+這個 repo 同時是完整 **skill catalog**：它列出 work-helper 可提供的 skills，但 catalog 不等於
+permission。remote bot 的 OMO 試用採單一 container，直接掛載既有完整 catalog，保留既有
+skill、MCP 與 plugin 設定；deployment registry／allowlist projection 是日後可選的發布控制，
+不是這次試用的前置阻礙。具體決策見 [ADR-0014](docs/adr/0014-skill-catalog-uses-remote-allowlist-projection.md)。
+
 ## Language
+
+**skill catalog**:
+work-helper 所有可提供 skills 的目錄。它描述「有哪些」，不表示任何執行權限。
+
+**deployment projection**:
+未來若需要發布控制，從 skill catalog 選出要提供給特定 deployment 的 skills 投影；不是權限
+本身。這次單 container 試用不要求先建立 projection。
+
+**remote allowlist**:
+未來 registry 可選的遠端發布名單。它不是這次單 container 試用的前置條件；試用可以掛載完整
+catalog。allowlist 也不等於 runtime permission，真正的限制仍由 runtime gate 執行。
 
 **待辦列**:
 「Bug/需求總表」上的一列，一件事。由 `record_id`（`Rec…` 開頭）識別。
@@ -15,6 +31,17 @@ _Avoid_: item、單（「任務」是另一個東西，見下）
 掛在某一個待辦列底下的 Slack 對話串，PM 與開發者在這裡就那一件事來回。
 Slack 原生提供，每一列在建立時就有一條，不需要也不能另外開。
 _Avoid_: 討論串、回報串（這兩個曾經指「工具自己另開的那條」，那個做法已經廢除）
+
+**原生 item thread context**:
+deployment 提供的 `record_id`，以及能證明它屬於這張 List 原生留言串的 Slack runtime context。
+`slack-list` 只接受這個範圍；它不是任意 OpenAB thread 的通用讀取器。沒有 context 時不能保證
+artifact 或回報能回到原 thread。
+
+**artifact**:
+由 remote runtime 產生、要附回原生 item 留言串的 regular file。local CLI 保留既有副檔名；
+remote mode 只接受 PNG、Markdown、HTML，HTML 必須明確指示。upload 與 thread post 都成功後
+才刪除來源；失敗時保留來源。container cleanup 只清理 `/home/node/drafts` 內已達 24 小時的
+regular artifact，不追 symlink，也不離開 root。
 
 **發起者**:
 明確要求 bot 建立待辦列的 Slack 使用者；真人直接在 List 建列時沒有另一個發起者。

@@ -7,6 +7,8 @@
 bin/slack-list          讀寫「Bug/需求總表」，並把處理進度回報到 Slack
 bin/sync-skills         把 .claude/skills/ 全部拉線到別的 repo 也叫得到的位置（新增 skill 後跑一次）
 .claude/skills/slack-list/      ↑ 的 skill：讓 agent 知道有這個東西、什麼時候用
+.claude/skills/product-handoff/  讀 repo/Slack、只產 handoff draft，不改 repo 或 Git
+.claude/skills/company-imagegen/  透過既有受限 runtime 產生 PNG／明確要求的 HTML
 .claude/skills/daily-worklog/   從 git commit 產工作日誌（只輸出文字，不落檔）
 .claude/skills/grilling/        釐清需求的訪談（第三方，見 skills-lock.json）
 .claude/skills/caveman/         壓縮輸出的講話模式（第三方，見 skills-lock.json）
@@ -18,6 +20,14 @@ docs/fleet-dry-run-checklist.md  跑一輪 fleet 的打勾表（消耗品，跑�
 docs/adr/               架構決定與當初的理由（含 fleet 的那幾個），改之前先讀
 CONTEXT.md              這條線上會混淆的詞（待辦列、任務、草稿、指紋…）
 ```
+
+## Remote OMO 試用
+
+remote bot 目前採單一 container 試用 OMO，直接掛載既有完整 skill catalog，保留既有 skill、
+MCP 與 plugin 設定；這次不做 remote allowlist projection 硬切換，也不實作獨立 broker。registry
+若日後需要，才作為可選的發布控制，不能成為本次試用的前置阻礙。詳見
+[ADR 0014](docs/adr/0014-skill-catalog-uses-remote-allowlist-projection.md) 與
+[CONTEXT.md](CONTEXT.md)。
 
 ## 裝成 skill
 
@@ -158,11 +168,20 @@ bin/slack-list draft Rec0B… \
 
 backlog agent 交付 `/home/node/drafts` 下的 prototype／artifact 請走專用的 `artifact` 入口（完整規矩見
 [slack-list skill](.claude/skills/slack-list/SKILL.md)），不要用 `draft` 代替。它只接受 resolve 後仍在該目錄
-下的 regular file 與白名單副檔名（`.html`、`.md`、`.css`、`.js`、`.json`、`.png`、`.zip`）；會附到既有
-item 留言串，不 @ 人、不改狀態或 List 檔案欄。大檔案會整份讀進記憶體再上傳，這是明確取捨。需要
+下的 regular file、白名單副檔名（`.html`、`.md`、`.css`、`.js`、`.json`、`.png`、`.zip`）與 10 MiB
+單檔上限；會附到原 item 留言串，不 @ 人、不改狀態或 List 檔案欄。必須有 deployment 提供的原
+`record_id`/thread context，否則不能保證回到原 thread。需要
 `files:write`、`chat:write` 與既有
 讀取留言串的 scopes（目前私有 channel 使用 `groups:read`、`groups:history`）；scope 有變更時要重新
 Install app，並使用 token rotation 後的新 token。
+
+local CLI 保留 `.html`、`.md`、`.css`、`.js`、`.json`、`.png`、`.zip`。remote runtime 明確加
+`--remote` 後只接受 `.png`、`.md`、`.html`；HTML 還要明確加 `--html`。upload、complete 或
+thread post 任一步失敗會保留來源；三者成功後才刪除來源 regular file。container cron／entrypoint
+可執行 `bin/slack-list cleanup`，清除 drafts 內已達 24 小時的 regular artifact，不追 symlink。
+
+`slack-list` 只能用 deployment 提供、且已對應到這張 List 原生 item 的 `record_id`／thread
+context；它不是任意 OpenAB thread 讀取器，沒有該 context 就不能保證回到原 Slack thread。
 
 `--report` 是一份 md，整份當訊息本體發出去，模板固定四段 —— 改了什麼／⚠️ 要先知道的事（有才寫）
 ／怎麼驗收／QA case。範本是 `.claude/skills/slack-list/report-template.md`，缺段就不准發。

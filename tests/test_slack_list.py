@@ -577,6 +577,7 @@ class SlackListTest(unittest.TestCase):
         self, upload_md, config, item_thread_ts, urlopen, api_get, api
     ):
         path = self.artifact_path()
+        artifact_size = path.stat().st_size
         api_get.return_value = {
             "upload_url": "https://uploads.example.test/file",
             "file_id": "F123FILE",
@@ -600,7 +601,7 @@ class SlackListTest(unittest.TestCase):
         upload_md.assert_not_called()
         api_get.assert_called_once_with(
             "files.getUploadURLExternal",
-            {"filename": "prototype.html", "length": str(path.stat().st_size)},
+            {"filename": "prototype.html", "length": str(artifact_size)},
             "token",
         )
         upload_request = urlopen.call_args.args[0]
@@ -625,6 +626,7 @@ class SlackListTest(unittest.TestCase):
         self.assertIn("附件已附上", payload["text"])
         self.assertNotIn("<@", payload["text"])
         self.assertIn("artifact 已交付", output.getvalue())
+        self.assertFalse(path.exists())
 
     def test_artifact_rejects_file_outside_drafts(self):
         with tempfile.TemporaryDirectory() as outside:
@@ -646,6 +648,101 @@ class SlackListTest(unittest.TestCase):
     def test_artifact_rejects_unknown_extension(self):
         path = self.artifact_path("prototype.exe")
         self.assert_artifact_rejected(path, "副檔名")
+
+    def test_artifact_rejects_over_limit_before_loading_config(self):
+        path = self.artifact_path(
+            "large.html", b"x" * (slack_list.ARTIFACT_MAX_BYTES + 1))
+        self.assert_artifact_rejected(path, "單檔上限")
+
+    def assert_remote_artifact_rejected(self, path, expected):
+        with patch.object(slack_list, "ARTIFACT_DRAFTS_ROOT", Path(self.tmp.name)), \
+                patch.object(slack_list, "config") as config, \
+                redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(SystemExit):
+                slack_list.cmd_artifact([
+                    "RecA", "--file", str(path), "--kind", "artifact",
+                    "--summary", "remote 測試", "--remote",
+                ])
+        self.assertIn(expected, errors.getvalue())
+        self.assertTrue(path.exists())
+        config.assert_not_called()
+
+    def test_remote_artifact_rejects_zip_and_js_but_local_extensions_remain_compatible(self):
+        for suffix in (".zip", ".js"):
+            with self.subTest(suffix=suffix):
+                path = self.artifact_path(f"local{suffix}", b"local")
+                self.assert_remote_artifact_rejected(path, "remote artifact")
+                with patch.object(slack_list, "ARTIFACT_DRAFTS_ROOT", Path(self.tmp.name)):
+                    resolved, data = slack_list.artifact_file(path)
+                self.assertEqual(resolved, path.resolve())
+                self.assertEqual(data, b"local")
+
+    def test_remote_html_requires_explicit_html_flag(self):
+        path = self.artifact_path("remote.html")
+        self.assert_remote_artifact_rejected(path, "明確加上 --html")
+
+    def test_local_artifact_command_keeps_zip_and_js_compatibility(self):
+        for suffix in (".zip", ".js"):
+            with self.subTest(suffix=suffix):
+                path = self.artifact_path(f"local{suffix}", b"local")
+                upload_response = MagicMock()
+                upload_response.__enter__.return_value.read.return_value = b""
+                with patch.object(slack_list, "ARTIFACT_DRAFTS_ROOT", Path(self.tmp.name)), \
+                        patch.object(slack_list, "config", return_value=("token", "F123")), \
+                        patch.object(slack_list, "item_thread_ts", return_value="1.2"), \
+                        patch.object(slack_list, "api_get", return_value={
+                            "upload_url": "https://uploads.example.test/file", "file_id": "F1"}), \
+                        patch.object(slack_list.urllib.request, "urlopen", return_value=upload_response), \
+                        patch.object(slack_list, "api", side_effect=[{}, {}]), \
+                        redirect_stdout(io.StringIO()):
+                    slack_list.cmd_artifact([
+                        "RecA", "--file", str(path), "--kind", "artifact",
+                        "--summary", "local 測試",
+                    ])
+                self.assertFalse(path.exists())
+
+    def test_cleanup_keeps_symlink_and_outside_file(self):
+        root = Path(self.tmp.name) / "drafts"
+        root.mkdir()
+        outside = Path(self.tmp.name) / "outside.png"
+        outside.write_bytes(b"outside")
+        link = root / "link.png"
+        link.symlink_to(outside)
+        now = 1_700_000_000.0
+        os.utime(outside, (now - slack_list.ARTIFACT_RETENTION_SECONDS - 1,) * 2)
+
+        with patch.object(slack_list, "ARTIFACT_DRAFTS_ROOT", root):
+            removed = slack_list.cleanup_artifacts(now=now)
+
+        self.assertEqual(removed, [])
+        self.assertTrue(link.is_symlink())
+        self.assertTrue(outside.exists())
+
+    def test_cleanup_keeps_23_59_and_deletes_at_24_00(self):
+        root = Path(self.tmp.name) / "drafts"
+        root.mkdir()
+        keep = root / "keep.png"
+        delete = root / "delete.png"
+        keep.write_bytes(b"keep")
+        delete.write_bytes(b"delete")
+        now = 1_700_000_000.0
+        os.utime(keep, (now - (24 * 60 * 60 - 59),) * 2)
+        os.utime(delete, (now - slack_list.ARTIFACT_RETENTION_SECONDS,) * 2)
+
+        with patch.object(slack_list, "ARTIFACT_DRAFTS_ROOT", root):
+            removed = slack_list.cleanup_artifacts(now=now)
+
+        self.assertTrue(keep.exists())
+        self.assertFalse(delete.exists())
+        self.assertEqual(removed, ["delete.png"])
+
+    @patch.object(slack_list, "item_threads")
+    def test_item_thread_rejects_cross_channel_parent(self, item_threads):
+        item_threads.return_value = {"RecA": {"ts": "1.2", "channel": "C999"}}
+        with patch.object(slack_list, "die", side_effect=SystemExit) as die:
+            with self.assertRaises(SystemExit):
+                slack_list.item_thread_ts("token", "F123", "RecA")
+        self.assertIn("錯誤 channel", die.call_args.args[0])
 
     def test_artifact_walks_directories_with_nofollow_flags_and_closes_fds(self):
         root = Path(self.tmp.name) / "drafts"
@@ -717,6 +814,7 @@ class SlackListTest(unittest.TestCase):
 
         api.assert_not_called()
         self.assertIn("檔案上傳失敗", errors.getvalue())
+        self.assertTrue(path.exists())
 
     @patch.object(slack_list, "api")
     @patch.object(slack_list, "api_get")
@@ -742,6 +840,7 @@ class SlackListTest(unittest.TestCase):
 
         api.assert_called_once()
         self.assertEqual(api.call_args.args[0], "files.completeUploadExternal")
+        self.assertTrue(path.exists())
 
     @patch.object(slack_list, "api")
     @patch.object(slack_list, "api_get")
@@ -770,6 +869,7 @@ class SlackListTest(unittest.TestCase):
         self.assertIn("附件可能已上傳", message)
         self.assertIn("先檢查 item 留言串", message)
         self.assertIn("勿直接重試", message)
+        self.assertTrue(path.exists())
 
     def test_check_url_rejects_non_http_scheme(self):
         with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as err:
