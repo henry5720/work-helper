@@ -1424,16 +1424,19 @@ def cmd_add(argv):
     ap.add_argument("--assignee", required=True, metavar="SLACK_USER_ID",
                     help="要加入指派的 Slack user ID")
     ap.add_argument("--requested-by", required=True, metavar="SLACK_USER_ID",
-                    help="OpenAB sender ID；必須和 --assignee 相同")
+                    help="發起者 ID（OpenAB sender，或 local 的 SLACK_MY_USER_ID）；"
+                         "必須和 --assignee 相同")
     report = ap.add_mutually_exclusive_group()
     report.add_argument("--report-to", metavar="SLACK_USER_ID",
                         help="回報對象；省略時預設 requested-by")
     report.add_argument("--no-reporter", action="store_true",
                         help="明確不指定回報對象")
-    ap.add_argument("--source-channel", required=True,
-                    help="OpenAB sender context 的 channel_id")
-    ap.add_argument("--source-thread", required=True,
-                    help="OpenAB sender context 的 thread_id")
+    # local（終端機）沒有 Slack 來源對話可指，兩個一起省略時 source_permalink()
+    # 回 None，下游每一處都是 `if source:` 保護的，那一列只會少一行「來源對話」。
+    ap.add_argument("--source-channel", default="",
+                    help="OpenAB sender context 的 channel_id；local 省略")
+    ap.add_argument("--source-thread", default="",
+                    help="OpenAB sender context 的 thread_id；local 省略")
     ap.add_argument("--force", action="store_true",
                     help="使用者已確認這是另一件事；略過同名合併與 item thread 防護")
     args = ap.parse_args(argv)
