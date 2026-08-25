@@ -10,6 +10,7 @@ bin/sync-skills         把 .claude/skills/ 全部拉線到別的 repo 也叫得
 .claude/skills/product-handoff/  讀 repo/Slack、只產 handoff draft，不改 repo 或 Git
 .claude/skills/company-imagegen/  透過既有受限 runtime 產生 PNG／明確要求的 HTML
 .claude/skills/daily-worklog/   從 git commit 產工作日誌（只輸出文字，不落檔）
+.claude/skills/compress-video/  把測試錄影壓成能貼進 Slack 留言串的證據影片（只用 ffmpeg，沒有對應的 bin/ 工具）
 .claude/skills/grilling/        釐清需求的訪談（第三方，見 skills-lock.json）
 .claude/skills/caveman/         壓縮輸出的講話模式（第三方，見 skills-lock.json）
 skills-lock.json        第三方 skill 的來源與 hash；更新用 `npx skills update -p`
