@@ -109,17 +109,30 @@ item 留言串時，才用裡面的 `channel_id` 和 `thread_id` 反查待辦列
 
 ## ➕ 建立待辦
 
-`add` 是 single-writer command，只由 OpenAB backlog agent執行。Local agent不要跑 `add`；local與
-遠端不共享process lock，同時查重後可能各建一列。其他讀取、`reporter`、`progress`、`ready`
-仍照各自權限在local使用。
+`add` 由 OpenAB backlog agent 與 local agent 都可以跑。
+
+⚠️ **同名去重是 read-then-write，而那把鎖只在單一 runtime 內有效。**
+`add_lock()` 鎖的是 `/tmp/work-helper-slack-list-add-<list_id>.lock`——container 的 `/tmp`
+與 host 的 `/tmp` 是兩個檔案，所以**跨 runtime 同時建同名列會各建一列**，Slack 那邊也沒有
+unique 約束擋。窗口很窄（要同一個標題、落在同幾秒內），代價是多一列、請使用者去 UI 刪
+（沒有刪除指令）。撞到才修鎖，不要為它預先加機制。
+
+**建之前一定要先查重**（`rows <關鍵字>`；0 列時再加 `--all` 查一次），這是唯一真正管用的
+防線，不是那把鎖。
 
 只有使用者明確要求「新增／建立待辦」才寫入。使用者明確給標題時直接建立；若要從一大段話
 濃縮標題或敘述，先把準備寫入的內容貼出來確認。到期日按 `Asia/Taipei` 換成實際
 `YYYY-MM-DD`，回覆時也顯示該日期；沒把握就問，不要猜。
 
-OpenAB 一律把當次 `sender_id` 同時傳給 `--assignee` 與 `--requested-by`：
+`--assignee` 與 `--requested-by` 必須是同一個 ID（腳本會擋），差別只在那個 ID 從哪來：
+
+| 跑在哪 | ID 來源 | 來源對話 |
+|---|---|---|
+| OpenAB | `openab.sender.v1.sender_id` | 帶 `--source-channel` / `--source-thread` |
+| local（終端機） | `.env` 的 `SLACK_MY_USER_ID` | **兩個都省略** |
 
 ```bash
+# OpenAB
 ./bin/slack-list add \
   --title "<使用者明確給出或已確認的標題>" \
   --description "<選填>" \
@@ -128,7 +141,18 @@ OpenAB 一律把當次 `sender_id` 同時傳給 `--assignee` 與 `--requested-by
   --requested-by <openab.sender.v1.sender_id> \
   --source-channel <openab.sender.v1.channel_id> \
   --source-thread <openab.sender.v1.thread_id>
+
+# local
+./bin/slack-list add \
+  --title "<使用者明確給出或已確認的標題>" \
+  --description "<選填>" \
+  --assignee "$SLACK_MY_USER_ID" \
+  --requested-by "$SLACK_MY_USER_ID"
 ```
+
+local 省略來源對話時那一列只是少一行「來源對話」——`--requested-by` 仍會寫進發起者註記，
+所以 `reporter --default` 之後找得到 fallback 對象。**不要為了填滿欄位隨便塞一個 channel／ts**，
+`chat.getPermalink` 取不到就會中止建立。
 
 使用者明確說「回報給 @某人」時，從 Slack mention 取可靠的 `U…` ID，加
 `--report-to U…`。說「不要通知任何人」才加 `--no-reporter`。**不要用顯示名稱猜 ID** ——
