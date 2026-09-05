@@ -13,6 +13,7 @@ bin/sync-skills         把 .claude/skills/ 全部拉線到別的 repo 也叫得
 .claude/skills/compress-video/  把測試錄影壓成能貼進 Slack 留言串的證據影片（只用 ffmpeg，沒有對應的 bin/ 工具）
 .claude/skills/grilling/        釐清需求的訪談（第三方，見 skills-lock.json）
 .claude/skills/caveman/         壓縮輸出的講話模式（第三方，見 skills-lock.json）
+.claude/skills/show-me/         用文字圖講清楚結構或流程（第三方，見 skills-lock.json）
 skills-lock.json        第三方 skill 的來源與 hash；更新用 `npx skills update -p`
 docs/adr/0011-...       skill 為什麼放 .claude/skills、為什麼是每支一條 symlink
 drafts/                 偵察的草稿（消耗品，gitignore，看完就派工或開 issue 然後刪）
